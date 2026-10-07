@@ -1,5 +1,6 @@
 "use client";
 
+import { Suspense } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Bell, Home, ListChecks, Plus, Users } from "lucide-react";
@@ -28,7 +29,6 @@ function isActive(pathname: string, href: string) {
  * - md+: left sidebar with nav and household card, content column centered
  */
 export function AppShell({ children }: { children: React.ReactNode }) {
-  const pathname = usePathname();
   const state = useHousehold();
   const me = state?.roommates.find((r) => r.id === state.currentUserId);
 
@@ -48,25 +48,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           New chore
         </Link>
 
-        <nav aria-label="Main" className="flex flex-col gap-1">
-          {NAV.map(({ href, label, icon: Icon }) => {
-            const active = isActive(pathname, href);
-            return (
-              <Link
-                key={href}
-                href={href}
-                aria-current={active ? "page" : undefined}
-                className={cn(
-                  "flex items-center gap-3 rounded-2xl px-4 py-3 font-medium text-plum-soft transition hover:bg-lilac-50 hover:text-plum",
-                  active && "bg-lilac-50 text-plum",
-                )}
-              >
-                <Icon className={cn("size-5", active && "text-lilac-700")} aria-hidden />
-                {label}
-              </Link>
-            );
-          })}
-        </nav>
+        <Suspense fallback={<SidebarNav pathname="" />}>
+          <WithPathname render={(p) => <SidebarNav pathname={p} />} />
+        </Suspense>
 
         {state && (
           <div className="mt-auto rounded-3xl bg-gradient-to-br from-lilac-50 to-blush-50 p-4">
@@ -93,26 +77,67 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         aria-label="Main"
         className="fixed inset-x-0 bottom-0 z-40 border-t border-border/70 bg-white/85 pb-[env(safe-area-inset-bottom)] backdrop-blur-lg md:hidden"
       >
-        <ul className="mx-auto grid max-w-md grid-cols-5 items-end px-2">
-          {NAV.slice(0, 2).map((item) => (
-            <TabItem key={item.href} {...item} active={isActive(pathname, item.href)} />
-          ))}
-          <li className="flex justify-center">
-            <Link
-              href="/chores/new"
-              aria-label="Add a chore"
-              aria-current={pathname === "/chores/new" ? "page" : undefined}
-              className="-mt-5 mb-2 flex size-14 items-center justify-center rounded-full bg-gradient-to-br from-plum to-[#5d3463] text-cream shadow-lift ring-4 ring-cream transition active:scale-95"
-            >
-              <Plus className="size-7" aria-hidden />
-            </Link>
-          </li>
-          {NAV.slice(2).map((item) => (
-            <TabItem key={item.href} {...item} active={isActive(pathname, item.href)} />
-          ))}
-        </ul>
+        <Suspense fallback={<TabBarItems pathname="" />}>
+          <WithPathname render={(p) => <TabBarItems pathname={p} />} />
+        </Suspense>
       </nav>
     </div>
+  );
+}
+
+/**
+ * Reads the pathname in its own small component. In the root layout,
+ * usePathname must sit under Suspense so dynamic routes can still prerender
+ * their shell (Cache Components); the fallback is the same nav, unhighlighted.
+ */
+function WithPathname({ render }: { render: (pathname: string) => React.ReactNode }) {
+  return render(usePathname());
+}
+
+function SidebarNav({ pathname }: { pathname: string }) {
+  return (
+    <nav aria-label="Main" className="flex flex-col gap-1">
+      {NAV.map(({ href, label, icon: Icon }) => {
+        const active = isActive(pathname, href);
+        return (
+          <Link
+            key={href}
+            href={href}
+            aria-current={active ? "page" : undefined}
+            className={cn(
+              "flex items-center gap-3 rounded-2xl px-4 py-3 font-medium text-plum-soft transition hover:bg-lilac-50 hover:text-plum",
+              active && "bg-lilac-50 text-plum",
+            )}
+          >
+            <Icon className={cn("size-5", active && "text-lilac-700")} aria-hidden />
+            {label}
+          </Link>
+        );
+      })}
+    </nav>
+  );
+}
+
+function TabBarItems({ pathname }: { pathname: string }) {
+  return (
+    <ul className="mx-auto grid max-w-md grid-cols-5 items-end px-2">
+      {NAV.slice(0, 2).map((item) => (
+        <TabItem key={item.href} {...item} active={isActive(pathname, item.href)} />
+      ))}
+      <li className="flex justify-center">
+        <Link
+          href="/chores/new"
+          aria-label="Add a chore"
+          aria-current={pathname === "/chores/new" ? "page" : undefined}
+          className="-mt-5 mb-2 flex size-14 items-center justify-center rounded-full bg-gradient-to-br from-plum to-[#5d3463] text-cream shadow-lift ring-4 ring-cream transition active:scale-95"
+        >
+          <Plus className="size-7" aria-hidden />
+        </Link>
+      </li>
+      {NAV.slice(2).map((item) => (
+        <TabItem key={item.href} {...item} active={isActive(pathname, item.href)} />
+      ))}
+    </ul>
   );
 }
 

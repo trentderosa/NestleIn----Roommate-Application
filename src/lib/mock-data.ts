@@ -87,7 +87,8 @@ export function createSeedState(now: Date = new Date()): HouseholdState {
       title: "Unload dishwasher",
       category: "kitchen",
       assigneeId: "emery",
-      dueAt: ago(90 * MINUTE),
+      // Earlier today on the hour (or late last night just after midnight).
+      dueAt: now.getHours() >= 2 ? at(0, now.getHours() - 1) : at(-1, 22),
       recurrence: "daily",
       rotate: true,
       points: 1,
