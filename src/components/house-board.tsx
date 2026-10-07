@@ -42,7 +42,10 @@ export function HouseBoard() {
           {state.household.name} {state.household.emoji}
         </p>
         <h1 className="mt-1 font-display text-3xl font-bold tracking-tight text-plum md:text-4xl">
-          {hello.text}, {me.name} {hello.emoji}
+          {hello.text},{" "}
+          <span className="whitespace-nowrap">
+            {me.name} {hello.emoji}
+          </span>
         </h1>
       </header>
 
