@@ -70,11 +70,15 @@ export function ChoreCard({
     setCelebrating(true);
     // Let the sparkle play before the card moves to "done".
     setTimeout(() => {
-      const prev = actions.completeChore(chore.id);
+      const undo = actions.completeChore(chore.id);
+      // Reset even though the card usually re-renders as "done": if the
+      // completion is undone, this same card must come back fully interactive.
+      setCelebrating(false);
+      if (!undo) return;
       const cheer = CHEERS[Math.floor(Math.random() * CHEERS.length)];
       toast(isMine ? `${chore.title}: done ✨` : `You covered for ${assignee?.name} 💕`, {
         description: isMine ? `${cheer} · +${chore.points} pts` : `${chore.title} is off the list.`,
-        action: { label: "Undo", onClick: () => actions.restore(prev) },
+        action: { label: "Undo", onClick: () => actions.undo(undo) },
       });
     }, CELEBRATE_MS);
   }

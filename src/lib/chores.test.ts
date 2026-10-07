@@ -3,12 +3,15 @@ import {
   boardSections,
   choreTiming,
   completeChore,
+  completeChoreWithUndo,
+  deleteChoreWithUndo,
   nextAssignee,
   nextDueDate,
   nudgeCooldownRemaining,
   saveChore,
   sendNudge,
   toggleReaction,
+  undo,
 } from "./chores";
 import { createSeedState } from "./mock-data";
 import { HOUR, MINUTE } from "./time";
@@ -143,5 +146,76 @@ describe("toggleReaction", () => {
     expect(added.activity.find((e) => e.id === "evt_soap")!.reactions["💕"]).toEqual(["krystiana"]);
     const removed = toggleReaction(added, "evt_soap", "💕");
     expect(removed.activity.find((e) => e.id === "evt_soap")!.reactions["💕"]).toBeUndefined();
+  });
+});
+
+describe("monthly recurrence (review fix)", () => {
+  const at = (y: number, m: number, d: number) => new Date(y, m, d, 18, 0);
+  // `now` well before the dates so nothing is skipped for being in the past.
+  const early = new Date(2026, 0, 1);
+
+  it("clamps to the end of a shorter month instead of overflowing", () => {
+    expect(nextDueDate(at(2027, 0, 31).toISOString(), "monthly", early)).toEqual(at(2027, 1, 28));
+    expect(nextDueDate(at(2028, 0, 31).toISOString(), "monthly", early)).toEqual(at(2028, 1, 29)); // leap year
+  });
+
+  it("returns to the anchor day after a short month", () => {
+    expect(nextDueDate(at(2027, 1, 28).toISOString(), "monthly", early, 31)).toEqual(at(2027, 2, 31));
+    expect(nextDueDate(at(2027, 2, 31).toISOString(), "monthly", early, 31)).toEqual(at(2027, 3, 30));
+  });
+
+  it("keeps the anchor across completions: Jan 31 -> Feb 28 -> Mar 31", () => {
+    let s = seed();
+    s = { ...s, chores: s.chores.map((c) => (c.id === "chore_tp" ? { ...c, dueAt: at(2027, 0, 31).toISOString() } : c)) };
+    const first = completeChore(s, "chore_tp", early);
+    const feb = first.chores.find((c) => c.seriesId === "series_tp" && c.status === "open")!;
+    expect(new Date(feb.dueAt)).toEqual(at(2027, 1, 28));
+    expect(feb.anchorDay).toBe(31);
+
+    const second = completeChore(first, feb.id, early);
+    const mar = second.chores.find((c) => c.seriesId === "series_tp" && c.status === "open")!;
+    expect(new Date(mar.dueAt)).toEqual(at(2027, 2, 31));
+  });
+});
+
+describe("undo (review fix)", () => {
+  it("undoing one completion keeps a later, unrelated completion", () => {
+    const s = seed();
+    const a = completeChoreWithUndo(s, "chore_counters", NOW);
+    const b = completeChoreWithUndo(a.state, "chore_trash", NOW);
+    const after = undo(b.state, a.undo!);
+
+    // A is open again, and its spawned next occurrence and events are gone.
+    expect(after.chores.find((c) => c.id === "chore_counters")!.status).toBe("open");
+    expect(after.chores.filter((c) => c.seriesId === "series_counters" && c.status === "open")).toHaveLength(1);
+    expect(after.activity.some((e) => e.type === "completed" && e.choreId === "chore_counters")).toBe(false);
+
+    // B's completion, next occurrence, and events survive.
+    expect(after.chores.find((c) => c.id === "chore_trash")!.status).toBe("done");
+    expect(after.chores.filter((c) => c.seriesId === "series_trash" && c.status === "open")).toHaveLength(1);
+    expect(after.activity.some((e) => e.type === "completed" && e.choreId === "chore_trash")).toBe(true);
+
+    // Streak: A was on time (+1, now reverted); B was late (no change).
+    const streak = (st: typeof s) => st.roommates.find((r) => r.id === "krystiana")!.streak;
+    expect(streak(after)).toBe(streak(s));
+  });
+
+  it("keeps reactions and nudges made after the completion", () => {
+    const a = completeChoreWithUndo(seed(), "chore_counters", NOW);
+    const reacted = toggleReaction(a.state, "evt_soap", "💕");
+    const nudged = sendNudge(reacted, { choreId: "chore_dishwasher", tone: "sweet", message: "hi" }, NOW);
+    const after = undo(nudged, a.undo!);
+    expect(after.activity.find((e) => e.id === "evt_soap")!.reactions["💕"]).toEqual(["krystiana"]);
+    expect(after.activity.some((e) => e.type === "nudged" && e.choreId === "chore_dishwasher" && e.message === "hi")).toBe(true);
+  });
+
+  it("restores a deleted chore in place without dropping later changes", () => {
+    const s = seed();
+    const index = s.chores.findIndex((c) => c.id === "chore_fridge");
+    const del = deleteChoreWithUndo(s, "chore_fridge");
+    const later = completeChore(del.state, "chore_counters", NOW);
+    const after = undo(later, del.undo!);
+    expect(after.chores[index].id).toBe("chore_fridge");
+    expect(after.chores.find((c) => c.id === "chore_counters")!.status).toBe("done");
   });
 });

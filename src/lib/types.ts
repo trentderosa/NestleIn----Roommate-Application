@@ -61,6 +61,12 @@ export type Chore = {
   recurrence: Recurrence;
   /** When true, the next occurrence goes to the next roommate in rotation order. */
   rotate: boolean;
+  /**
+   * Monthly chores only: the intended day of month, so a chore due on the
+   * 31st stays on the 31st after a short month (Jan 31 -> Feb 28 -> Mar 31).
+   * Unset means "use the due date's day".
+   */
+  anchorDay?: number;
   points: Points;
   createdBy: ID;
   createdAt: string;

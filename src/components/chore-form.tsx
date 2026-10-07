@@ -129,8 +129,10 @@ export function ChoreForm({ state, chore, now }: { state: HouseholdState; chore?
       setConfirmDelete(true);
       return;
     }
-    const prev = actions.deleteChore(chore.id);
-    toast(`${chore.title} removed`, { action: { label: "Undo", onClick: () => actions.restore(prev) } });
+    const undo = actions.deleteChore(chore.id);
+    if (undo) {
+      toast(`${chore.title} removed`, { action: { label: "Undo", onClick: () => actions.undo(undo) } });
+    }
     router.push("/chores?filter=all");
   }
 

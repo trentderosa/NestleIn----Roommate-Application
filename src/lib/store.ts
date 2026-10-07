@@ -95,11 +95,11 @@ export function useNow(): Date {
 }
 
 export const actions = {
-  /** Returns the previous state so callers can offer "Undo". */
-  completeChore(choreId: ID): HouseholdState {
-    const prev = getSnapshot();
-    setState(logic.completeChore(prev, choreId, new Date()));
-    return prev;
+  /** Returns an undo record for exactly this completion (null if nothing changed). */
+  completeChore(choreId: ID): logic.UndoRecord | null {
+    const { state: next, undo } = logic.completeChoreWithUndo(getSnapshot(), choreId, new Date());
+    setState(next);
+    return undo;
   },
   sendNudge(input: { choreId: ID; tone: NudgeTone; message: string }) {
     setState(logic.sendNudge(getSnapshot(), input, new Date()));
@@ -107,19 +107,21 @@ export const actions = {
   saveChore(input: ChoreInput, id?: ID) {
     setState(logic.saveChore(getSnapshot(), input, new Date(), id));
   },
-  deleteChore(id: ID): HouseholdState {
-    const prev = getSnapshot();
-    setState(logic.deleteChore(prev, id));
-    return prev;
+  /** Returns an undo record for exactly this deletion (null if nothing changed). */
+  deleteChore(id: ID): logic.UndoRecord | null {
+    const { state: next, undo } = logic.deleteChoreWithUndo(getSnapshot(), id);
+    setState(next);
+    return undo;
+  },
+  /** Reverse one earlier operation without touching anything that happened since. */
+  undo(record: logic.UndoRecord) {
+    setState(logic.undo(getSnapshot(), record));
   },
   toggleReaction(eventId: ID, emoji: string) {
     setState(logic.toggleReaction(getSnapshot(), eventId, emoji));
   },
   switchUser(id: ID) {
     setState({ ...getSnapshot(), currentUserId: id });
-  },
-  restore(snapshot: HouseholdState) {
-    setState(snapshot);
   },
   resetDemo() {
     setState(createSeedState(new Date()));

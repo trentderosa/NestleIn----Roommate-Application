@@ -125,12 +125,22 @@ export function nudgeCooldownRemaining(
 // Recurrence + rotation
 // ---------------------------------------------------------------------------
 
-function addInterval(d: Date, recurrence: Exclude<Recurrence, "once">): Date {
+/**
+ * One recurrence step. Monthly steps land on `anchorDay`, clamped to the
+ * length of the target month (Jan 31 -> Feb 28 -> Mar 31), instead of letting
+ * Date overflow into the following month.
+ */
+function addInterval(d: Date, recurrence: Exclude<Recurrence, "once">, anchorDay: number): Date {
   const x = new Date(d);
   if (recurrence === "daily") x.setDate(x.getDate() + 1);
   if (recurrence === "weekly") x.setDate(x.getDate() + 7);
   if (recurrence === "biweekly") x.setDate(x.getDate() + 14);
-  if (recurrence === "monthly") x.setMonth(x.getMonth() + 1);
+  if (recurrence === "monthly") {
+    x.setDate(1); // avoid overflow while changing month
+    x.setMonth(x.getMonth() + 1);
+    const daysInMonth = new Date(x.getFullYear(), x.getMonth() + 1, 0).getDate();
+    x.setDate(Math.min(anchorDay, daysInMonth));
+  }
   return x;
 }
 
@@ -138,11 +148,21 @@ function addInterval(d: Date, recurrence: Exclude<Recurrence, "once">): Date {
  * Next due date after an occurrence is finished. Keeps the original time of
  * day and skips forward past `now`, so finishing late doesn't create an
  * instantly-overdue next occurrence.
+ *
+ * `anchorDay` is the intended day of month for monthly chores (defaults to
+ * the due date's day).
  */
-export function nextDueDate(dueAt: string, recurrence: Recurrence, now: Date): Date | null {
+export function nextDueDate(
+  dueAt: string,
+  recurrence: Recurrence,
+  now: Date,
+  anchorDay?: number,
+): Date | null {
   if (recurrence === "once") return null;
-  let next = addInterval(new Date(dueAt), recurrence);
-  while (next.getTime() <= now.getTime()) next = addInterval(next, recurrence);
+  const start = new Date(dueAt);
+  const anchor = anchorDay ?? start.getDate();
+  let next = addInterval(start, recurrence, anchor);
+  while (next.getTime() <= now.getTime()) next = addInterval(next, recurrence, anchor);
   return next;
 }
 
@@ -159,9 +179,34 @@ function event(data: ActivityEventData, now: Date): ActivityEvent {
   return { id: newId("evt"), at: now.toISOString(), reactions: {}, ...data };
 }
 
+/**
+ * What it takes to reverse one operation, and nothing else. Undo must not
+ * restore a whole-household snapshot: that would also wipe out anything that
+ * happened in between (other completions, nudges, reactions, edits).
+ */
+export type UndoRecord =
+  | {
+      kind: "complete";
+      choreId: ID;
+      /** Next occurrence created by the completion, if any. */
+      spawnedId?: ID;
+      eventIds: ID[];
+      /** Roommate whose streak grew, if it did. */
+      streakActorId?: ID;
+    }
+  | { kind: "delete"; chore: Chore; index: number };
+
 export function completeChore(state: HouseholdState, choreId: ID, now: Date): HouseholdState {
+  return completeChoreWithUndo(state, choreId, now).state;
+}
+
+export function completeChoreWithUndo(
+  state: HouseholdState,
+  choreId: ID,
+  now: Date,
+): { state: HouseholdState; undo: UndoRecord | null } {
   const chore = state.chores.find((c) => c.id === choreId);
-  if (!chore || chore.status === "done") return state;
+  if (!chore || chore.status === "done") return { state, undo: null };
 
   const actorId = state.currentUserId;
   const onTime = now.toISOString() <= chore.dueAt;
@@ -187,16 +232,21 @@ export function completeChore(state: HouseholdState, choreId: ID, now: Date): Ho
 
   const chores = state.chores.map((c) => (c.id === choreId ? done : c));
 
-  const nextDue = nextDueDate(chore.dueAt, chore.recurrence, now);
+  const anchorDay =
+    chore.recurrence === "monthly" ? (chore.anchorDay ?? new Date(chore.dueAt).getDate()) : undefined;
+  const nextDue = nextDueDate(chore.dueAt, chore.recurrence, now, anchorDay);
+  let spawnedId: ID | undefined;
   if (nextDue) {
     const assigneeId = chore.rotate
       ? nextAssignee(chore.assigneeId, state.household.memberIds)
       : chore.assigneeId;
+    spawnedId = newId("chore");
     chores.push({
       ...chore,
-      id: newId("chore"),
+      id: spawnedId,
       assigneeId,
       dueAt: nextDue.toISOString(),
+      anchorDay,
       status: "open",
       completedAt: undefined,
       completedBy: undefined,
@@ -213,7 +263,16 @@ export function completeChore(state: HouseholdState, choreId: ID, now: Date): Ho
     ? state.roommates.map((r) => (r.id === actorId ? { ...r, streak: r.streak + 1 } : r))
     : state.roommates;
 
-  return { ...state, chores, roommates, activity: [...events, ...state.activity] };
+  return {
+    state: { ...state, chores, roommates, activity: [...events, ...state.activity] },
+    undo: {
+      kind: "complete",
+      choreId,
+      spawnedId,
+      eventIds: events.map((e) => e.id),
+      streakActorId: onTime ? actorId : undefined,
+    },
+  };
 }
 
 export function sendNudge(
@@ -258,7 +317,12 @@ export function saveChore(
   if (id) {
     return {
       ...state,
-      chores: state.chores.map((c) => (c.id === id ? { ...c, ...clean } : c)),
+      chores: state.chores.map((c) => {
+        if (c.id !== id) return c;
+        // A new due date or schedule sets a new monthly anchor.
+        const rescheduled = c.dueAt !== clean.dueAt || c.recurrence !== clean.recurrence;
+        return { ...c, ...clean, anchorDay: rescheduled ? undefined : c.anchorDay };
+      }),
     };
   }
 
@@ -285,7 +349,46 @@ export function saveChore(
 }
 
 export function deleteChore(state: HouseholdState, id: ID): HouseholdState {
-  return { ...state, chores: state.chores.filter((c) => c.id !== id) };
+  return deleteChoreWithUndo(state, id).state;
+}
+
+export function deleteChoreWithUndo(
+  state: HouseholdState,
+  id: ID,
+): { state: HouseholdState; undo: UndoRecord | null } {
+  const index = state.chores.findIndex((c) => c.id === id);
+  if (index === -1) return { state, undo: null };
+  return {
+    state: { ...state, chores: state.chores.filter((c) => c.id !== id) },
+    undo: { kind: "delete", chore: state.chores[index], index },
+  };
+}
+
+/** Reverse exactly one earlier operation, leaving everything since intact. */
+export function undo(state: HouseholdState, record: UndoRecord): HouseholdState {
+  if (record.kind === "delete") {
+    if (state.chores.some((c) => c.id === record.chore.id)) return state;
+    const chores = [...state.chores];
+    chores.splice(Math.min(record.index, chores.length), 0, record.chore);
+    return { ...state, chores };
+  }
+
+  const eventIds = new Set(record.eventIds);
+  return {
+    ...state,
+    chores: state.chores
+      // Drop the spawned next occurrence, unless someone already finished it too.
+      .filter((c) => !(c.id === record.spawnedId && c.status === "open"))
+      .map((c) =>
+        c.id === record.choreId && c.status === "done"
+          ? { ...c, status: "open" as const, completedAt: undefined, completedBy: undefined }
+          : c,
+      ),
+    roommates: state.roommates.map((r) =>
+      r.id === record.streakActorId ? { ...r, streak: Math.max(0, r.streak - 1) } : r,
+    ),
+    activity: state.activity.filter((e) => !eventIds.has(e.id)),
+  };
 }
 
 export function toggleReaction(state: HouseholdState, eventId: ID, emoji: string): HouseholdState {
