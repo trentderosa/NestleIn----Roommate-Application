@@ -278,7 +278,7 @@ export function createSeedState(now: Date = new Date()): HouseholdState {
       choreId: "chore_trash",
       choreTitle: "Take out the trash",
       tone: "funny",
-      message: "the trash has officially entered its villain era 😈",
+      message: "the trash bags are forming a union 😭 pls free them",
       reactions: { "😂": ["krystiana", "emery"] },
     },
     {

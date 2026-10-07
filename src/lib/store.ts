@@ -14,7 +14,7 @@
  * bodies for API calls (optionally applying the pure transition first as an
  * optimistic update).
  */
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useSyncExternalStore } from "react";
 import * as logic from "./chores";
 import { STATE_VERSION, createSeedState } from "./mock-data";
 import type { ChoreInput, HouseholdState, ID, NudgeTone } from "./types";
@@ -53,6 +53,7 @@ function subscribe(listener: () => void) {
 
 function setState(next: HouseholdState) {
   state = next;
+  clock = new Date(); // keep "now" in step with the change we just made
   try {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
   } catch {
@@ -66,14 +67,31 @@ export function useHousehold(): HouseholdState | null {
   return useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
 }
 
-/** The current time, refreshed every 30s so relative labels stay accurate. */
+// A shared client clock. Like household state, it's never read on the server:
+// prerendering a time-dependent value would bake a stale "now" into the HTML.
+let clock: Date | null = null;
+const EPOCH = new Date(0);
+
+function subscribeClock(listener: () => void) {
+  const t = setInterval(() => {
+    clock = new Date();
+    listener();
+  }, 30_000);
+  return () => clearInterval(t);
+}
+
+function getClock(): Date {
+  if (!clock) clock = new Date();
+  return clock;
+}
+
+/**
+ * The current time, refreshed every 30s so relative labels stay accurate.
+ * Returns the epoch on the server; only use it alongside household data
+ * (which is also client-only).
+ */
 export function useNow(): Date {
-  const [now, setNow] = useState(() => new Date());
-  useEffect(() => {
-    const t = setInterval(() => setNow(new Date()), 30_000);
-    return () => clearInterval(t);
-  }, []);
-  return now;
+  return useSyncExternalStore(subscribeClock, getClock, () => EPOCH);
 }
 
 export const actions = {

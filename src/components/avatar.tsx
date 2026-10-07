@@ -13,6 +13,8 @@ const SIZES = {
 /**
  * Generated placeholder avatar: initial on the roommate's accent gradient,
  * with an optional emoji badge. Swap for <img> when real photos exist.
+ * Decorative: always render the roommate's name nearby (or an aria-label on
+ * the surrounding link).
  */
 export function Avatar({
   roommate,
@@ -27,7 +29,7 @@ export function Avatar({
 }) {
   const accent = ACCENTS[roommate.accent];
   return (
-    <span className={cn("relative inline-flex shrink-0", SIZES[size].text, className)}>
+    <span aria-hidden className={cn("relative inline-flex shrink-0", SIZES[size].text, className)}>
       <span
         aria-hidden
         className={cn(
@@ -46,7 +48,6 @@ export function Avatar({
           {roommate.emoji}
         </span>
       )}
-      <span className="sr-only">{roommate.name}</span>
     </span>
   );
 }

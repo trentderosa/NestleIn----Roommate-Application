@@ -49,7 +49,10 @@ export function dueLabel(iso: string, now: Date): string {
   const d = new Date(iso);
   const days = dayDiff(d, now);
   const time = formatTime(d);
-  if (days === 0) return d.getHours() >= 17 ? `tonight at ${time}` : `today at ${time}`;
+  if (days === 0) {
+    if (d < now || d.getHours() < 17) return `today at ${time}`;
+    return `tonight at ${time}`;
+  }
   if (days === 1) return `tomorrow at ${time}`;
   if (days === -1) return `yesterday at ${time}`;
   if (days > 1 && days < 7) return `${formatWeekday(d)} at ${time}`;
