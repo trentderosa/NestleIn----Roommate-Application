@@ -2,26 +2,26 @@
 
 import { useState } from "react";
 import { AlertTriangle, LifeBuoy } from "lucide-react";
-import { BACKUP_KEY } from "@/lib/store-core";
 import { actions, useHouseholdSnapshot } from "@/lib/store";
 
 /**
- * Honest status about saving: shown when changes aren't reaching storage, or
- * when saved data couldn't be read and the app started fresh.
+ * Honest status about saving: shown when changes aren't reaching storage,
+ * when unsaved changes conflict with another tab, or when saved data couldn't
+ * be read and the app started fresh.
  */
 export function StorageNotice() {
   const snapshot = useHouseholdSnapshot();
   const [copied, setCopied] = useState(false);
   if (!snapshot) return null;
-  const { persistence, recovery } = snapshot;
+  const { persistence, recovery, conflicts, pending } = snapshot;
+  // While unbacked old data is protected, the recovery notice explains it.
+  const showSaveProblem = persistence !== "saved" && !(recovery && !recovery.backedUp);
 
-  async function copyBackup() {
+  async function copyOldData() {
+    if (!recovery) return;
     try {
-      const backup = window.localStorage.getItem(BACKUP_KEY);
-      if (backup) {
-        await navigator.clipboard.writeText(backup);
-        setCopied(true);
-      }
+      await navigator.clipboard.writeText(recovery.raw);
+      setCopied(true);
     } catch {
       setCopied(false);
     }
@@ -29,70 +29,107 @@ export function StorageNotice() {
 
   return (
     <>
-      {persistence !== "saved" && (
-        <div
-          role="status"
-          className="mx-auto mb-2 flex max-w-5xl items-start gap-3 rounded-2xl bg-butter-50 px-4 py-3 text-sm text-plum md:mt-4"
-        >
-          <AlertTriangle className="mt-0.5 size-4 shrink-0 text-butter-700" aria-hidden />
-          <div className="min-w-0 flex-1">
-            <p className="font-semibold">Changes aren&apos;t being saved on this device</p>
-            <p className="text-plum-soft">
-              {persistence === "unavailable"
-                ? "This browser is blocking storage (private mode can do this). You can keep using NestleIn, but changes will disappear when you close this tab."
-                : "Storage is full, so your last change wasn't saved. It'll stay until you close this tab."}
-            </p>
+      {showSaveProblem && persistence === "conflict" && (
+        <Notice tone="warn">
+          <p className="font-semibold">
+            Some unsaved changes no longer fit what was saved in another tab
+          </p>
+          <ul className="mt-1 list-disc pl-5 text-plum-soft">
+            {conflicts.map((c) => (
+              <li key={c}>{c}</li>
+            ))}
+          </ul>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <NoticeButton onClick={() => actions.retrySave()}>Try again</NoticeButton>
+            <NoticeButton quiet onClick={() => actions.discardPending()}>
+              Discard unsaved changes
+            </NoticeButton>
           </div>
+        </Notice>
+      )}
+
+      {showSaveProblem && persistence !== "conflict" && (
+        <Notice tone="warn">
+          <p className="font-semibold">Changes aren&apos;t being saved on this device</p>
+          <p className="text-plum-soft">
+            {persistence === "unavailable"
+              ? "This browser is blocking storage (private mode can do this). You can keep using NestleIn, but changes will disappear when you close this tab."
+              : `Storage is full, so ${pending === 1 ? "your last change wasn't" : `${pending} changes weren't`} saved. They'll stay until you close this tab.`}
+          </p>
           {persistence === "failed" && (
-            <button
-              type="button"
-              onClick={() => actions.retrySave()}
-              className="shrink-0 rounded-full bg-white px-3 py-1.5 font-semibold text-plum shadow-soft"
-            >
-              Try again
-            </button>
+            <div className="mt-2">
+              <NoticeButton onClick={() => actions.retrySave()}>Try again</NoticeButton>
+            </div>
           )}
-        </div>
+        </Notice>
       )}
 
       {recovery && (
-        <div
-          role="status"
-          className="mx-auto mb-2 flex max-w-5xl items-start gap-3 rounded-2xl bg-lilac-50 px-4 py-3 text-sm text-plum md:mt-4"
-        >
-          <LifeBuoy className="mt-0.5 size-4 shrink-0 text-lilac-700" aria-hidden />
-          <div className="min-w-0 flex-1">
-            <p className="font-semibold">We couldn&apos;t read your saved data, so we started fresh</p>
-            <p className="text-plum-soft">
-              {recovery.backedUp
-                ? "A copy of the old data was kept on this device in case you need it."
-                : "We couldn't keep a copy of the old data."}
-            </p>
-            <div className="mt-2 flex flex-wrap gap-2">
-              {recovery.backedUp && (
-                <button
-                  type="button"
-                  onClick={copyBackup}
-                  className="rounded-full bg-white px-3 py-1.5 font-semibold text-lilac-700 shadow-soft"
-                >
-                  {copied ? "Copied" : "Copy old data"}
-                </button>
-              )}
-              <button
-                type="button"
-                onClick={() => {
-                  actions.dismissRecovery();
-                  // The notice (and the focused button) disappears; keep focus in the page.
-                  document.getElementById("main")?.focus();
-                }}
-                className="rounded-full px-3 py-1.5 font-semibold text-plum-soft hover:text-plum"
-              >
-                Dismiss
-              </button>
-            </div>
+        <Notice tone="info">
+          <p className="font-semibold">We couldn&apos;t read your saved data, so we started fresh</p>
+          <p className="text-plum-soft">
+            {recovery.backedUp
+              ? "A copy of the old data was kept on this device in case you need it."
+              : "We couldn't keep a backup copy, so nothing new is saved until you dismiss this. Copy the old data first if you need it."}
+          </p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <NoticeButton onClick={copyOldData}>{copied ? "Copied" : "Copy old data"}</NoticeButton>
+            <NoticeButton
+              quiet
+              onClick={() => {
+                actions.dismissRecovery();
+                // The notice (and the focused button) disappears; keep focus in the page.
+                document.getElementById("main")?.focus();
+              }}
+            >
+              {recovery.backedUp ? "Dismiss" : "Dismiss and start saving"}
+            </NoticeButton>
           </div>
-        </div>
+        </Notice>
       )}
     </>
+  );
+}
+
+function Notice({ tone, children }: { tone: "warn" | "info"; children: React.ReactNode }) {
+  const Icon = tone === "warn" ? AlertTriangle : LifeBuoy;
+  return (
+    <div
+      role="status"
+      className={
+        "mx-auto mb-2 flex max-w-5xl items-start gap-3 rounded-2xl px-4 py-3 text-sm text-plum md:mt-4 " +
+        (tone === "warn" ? "bg-butter-50" : "bg-lilac-50")
+      }
+    >
+      <Icon
+        className={"mt-0.5 size-4 shrink-0 " + (tone === "warn" ? "text-butter-700" : "text-lilac-700")}
+        aria-hidden
+      />
+      <div className="min-w-0 flex-1">{children}</div>
+    </div>
+  );
+}
+
+function NoticeButton({
+  onClick,
+  quiet = false,
+  children,
+}: {
+  onClick: () => void;
+  quiet?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={
+        quiet
+          ? "rounded-full px-3 py-1.5 font-semibold text-plum-soft hover:text-plum"
+          : "rounded-full bg-white px-3 py-1.5 font-semibold text-plum shadow-soft"
+      }
+    >
+      {children}
+    </button>
   );
 }
