@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 import { useHousehold } from "@/lib/store";
 import { Avatar, AvatarStack } from "./avatar";
 import { Logo } from "./logo";
+import { ProfileButton, ProfileSheetHost } from "./profile-sheet";
 import { StorageNotice } from "./storage-notice";
 
 const NAV = [
@@ -62,14 +63,16 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <div className="mt-3 flex items-center justify-between">
               <AvatarStack roommates={state.roommates} size="xs" />
               {me && (
-                <span className="flex items-center gap-1.5 text-xs text-plum-soft">
+                <ProfileButton roommate={me} isMe className="gap-1.5 px-2 text-xs text-plum-soft hover:text-plum">
                   <Avatar roommate={me} size="xs" /> you
-                </span>
+                </ProfileButton>
               )}
             </div>
           </div>
         )}
       </aside>
+
+      <ProfileSheetHost />
 
       <main id="main" tabIndex={-1} className="pb-28 outline-none md:pb-12 md:pl-64">
         <div className="px-4 pt-4 sm:px-6 md:pt-0 lg:px-10 empty:hidden">

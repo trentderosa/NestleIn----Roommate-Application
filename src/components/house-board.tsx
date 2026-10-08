@@ -13,6 +13,7 @@ import { Avatar } from "./avatar";
 import { ChoreCard } from "./chore-card";
 import { Logo } from "./logo";
 import { NudgeSheet } from "./nudge-sheet";
+import { ProfileButton, openProfile } from "./profile-sheet";
 import { EmptyState, Page, ScreenSkeleton, Section } from "./page-bits";
 
 export function HouseBoard() {
@@ -32,9 +33,9 @@ export function HouseBoard() {
       {/* Mobile top bar */}
       <div className="mb-5 flex items-center justify-between md:hidden">
         <Logo />
-        <Link href="/roommates" aria-label={`${me.name}, see roommates`}>
+        <ProfileButton roommate={me} isMe>
           <Avatar roommate={me} size="sm" />
-        </Link>
+        </ProfileButton>
       </div>
 
       <header className="mb-6">
@@ -155,9 +156,10 @@ function TodaySummary({
           const stats = roommateStats(state, r, now);
           return (
             <li key={r.id}>
-              <Link
-                href="/roommates"
-                className="flex items-center gap-2 rounded-full bg-white/60 py-1 pr-3 pl-1 text-sm font-semibold backdrop-blur transition hover:bg-white/90"
+              <button
+                type="button"
+                onClick={() => openProfile(r.id)}
+                className="flex min-h-11 items-center gap-2 rounded-full bg-white/60 py-1 pr-3 pl-1.5 text-sm font-semibold backdrop-blur transition hover:bg-white/90"
               >
                 <Avatar roommate={r} size="xs" />
                 {r.id === state.currentUserId ? "You" : r.name}
@@ -172,8 +174,9 @@ function TodaySummary({
                   {stats.overdueCount > 0
                     ? `${stats.overdueCount} running late`
                     : `${stats.open.length} on their list`}
+                  , open profile
                 </span>
-              </Link>
+              </button>
             </li>
           );
         })}

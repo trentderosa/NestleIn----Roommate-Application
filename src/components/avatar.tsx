@@ -8,6 +8,8 @@ const SIZES = {
   md: { box: "size-11", text: "text-sm" },
   lg: { box: "size-16", text: "text-xl" },
   xl: { box: "size-20", text: "text-2xl" },
+  /** 72px, for the profile header. */
+  profile: { box: "size-[72px]", text: "text-2xl" },
 };
 
 /**

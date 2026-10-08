@@ -8,6 +8,7 @@ import { actions } from "@/lib/store";
 import { relativeTime } from "@/lib/time";
 import type { ActivityEvent, HouseholdState, ID } from "@/lib/types";
 import { Avatar } from "./avatar";
+import { ProfileButton } from "./profile-sheet";
 
 const REACTIONS = ["💕", "✨", "🙌", "😂"];
 
@@ -103,7 +104,11 @@ export function ActivityItem({
   return (
     <li className="flex gap-3">
       <span className="relative h-fit">
-        {subject && <Avatar roommate={subject} size="md" />}
+        {subject && (
+          <ProfileButton roommate={subject} isMe={subject.id === me}>
+            <Avatar roommate={subject} size="md" />
+          </ProfileButton>
+        )}
         <span
           className="absolute -right-1 -bottom-1 grid size-5 place-items-center rounded-full bg-white text-[11px] shadow-soft"
           aria-label={BADGE[event.type].label}

@@ -9,6 +9,8 @@ import { actions, useHousehold, useNow } from "@/lib/store";
 import { DAY, dueLabel } from "@/lib/time";
 import type { HouseholdState, Roommate } from "@/lib/types";
 import { Avatar } from "./avatar";
+import { ProfileButton } from "./profile-sheet";
+import { activeStatus } from "@/lib/profile";
 import { Page, PageHeader, ScreenSkeleton } from "./page-bits";
 
 export function RoommatesScreen() {
@@ -117,12 +119,15 @@ function RoommateCard({ roommate, state, now }: { roommate: Roommate; state: Hou
   const stats = roommateStats(state, roommate, now);
   const accent = ACCENTS[roommate.accent];
   const isMe = roommate.id === state.currentUserId;
+  const status = activeStatus(roommate, now);
 
   return (
     <li className="overflow-hidden rounded-[2rem] bg-white shadow-soft">
       <div className={cn("h-16 bg-gradient-to-br", accent.gradient)} aria-hidden />
       <div className="-mt-10 px-5 pb-5">
-        <Avatar roommate={roommate} size="xl" badge className="ring-4 ring-white rounded-full" />
+        <ProfileButton roommate={roommate} isMe={isMe}>
+          <Avatar roommate={roommate} size="xl" badge className="ring-4 ring-white rounded-full" />
+        </ProfileButton>
         <div className="mt-2 flex items-baseline justify-between gap-2">
           <h2 className="font-display text-2xl font-bold text-plum">
             {roommate.name}
@@ -134,7 +139,12 @@ function RoommateCard({ roommate, state, now }: { roommate: Roommate; state: Hou
             </span>
           )}
         </div>
-        <p className="mt-0.5 text-sm text-plum-soft italic">“{roommate.status}”</p>
+        {status && (
+          <p className="mt-0.5 text-sm text-plum-soft italic">
+            {status.emoji && <span className="not-italic">{status.emoji} </span>}
+            {status.text && <>“{status.text}”</>}
+          </p>
+        )}
 
         <dl className="mt-4 grid grid-cols-3 gap-2 text-center">
           <Stat label={isMe ? "on your list" : "on their list"} value={stats.open.length} className={accent.soft} />

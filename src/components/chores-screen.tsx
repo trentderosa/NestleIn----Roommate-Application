@@ -39,7 +39,7 @@ export function ChoresScreen() {
   const pathname = usePathname();
   const params = useSearchParams();
   const [nudging, setNudging] = useState<Chore | null>(null);
-  const [mineOnly, setMineOnly] = useState(false);
+  const [mineOnly, setMineOnly] = useState(() => params.get("mine") === "1");
 
   if (!state) return <ScreenSkeleton />;
 
