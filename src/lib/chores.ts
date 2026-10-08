@@ -364,30 +364,65 @@ export function deleteChoreWithUndo(
   };
 }
 
-/** Reverse exactly one earlier operation, leaving everything since intact. */
-export function undo(state: HouseholdState, record: UndoRecord): HouseholdState {
+export type UndoResult =
+  | { ok: true; state: HouseholdState }
+  /** Nothing changed; `reason` is user-facing. */
+  | { ok: false; state: HouseholdState; reason: string };
+
+/**
+ * Reverse exactly one earlier operation, leaving everything since intact.
+ *
+ * Refuses (ok: false, state unchanged) when reversing would break the
+ * household: most importantly, it never leaves two open occurrences of the
+ * same recurring chore.
+ */
+export function undo(state: HouseholdState, record: UndoRecord): UndoResult {
+  const no = (reason: string): UndoResult => ({ ok: false, state, reason });
+
   if (record.kind === "delete") {
-    if (state.chores.some((c) => c.id === record.chore.id)) return state;
+    if (state.chores.some((c) => c.id === record.chore.id)) return no("That chore is already back.");
+    const openTwin = state.chores.some(
+      (c) => c.seriesId === record.chore.seriesId && c.status === "open" && record.chore.status === "open",
+    );
+    if (openTwin) return no("There's already an open copy of this chore, so it can't come back.");
     const chores = [...state.chores];
     chores.splice(Math.min(record.index, chores.length), 0, record.chore);
-    return { ...state, chores };
+    return { ok: true, state: { ...state, chores } };
+  }
+
+  const original = state.chores.find((c) => c.id === record.choreId);
+  if (!original) return no("That chore was removed, so there's nothing to undo.");
+  if (original.status !== "done") return no("That's already been undone.");
+
+  const spawned = record.spawnedId ? state.chores.find((c) => c.id === record.spawnedId) : undefined;
+  if (spawned?.status === "done") {
+    return no(`The next “${original.title}” is already done, so this one can't be undone.`);
+  }
+  // Reopening must not create a second open occurrence in the series.
+  const otherOpen = state.chores.some(
+    (c) => c.seriesId === original.seriesId && c.status === "open" && c.id !== record.spawnedId,
+  );
+  if (otherOpen) {
+    return no(`There's already an open “${original.title}”, so this one can't be undone.`);
   }
 
   const eventIds = new Set(record.eventIds);
   return {
-    ...state,
-    chores: state.chores
-      // Drop the spawned next occurrence, unless someone already finished it too.
-      .filter((c) => !(c.id === record.spawnedId && c.status === "open"))
-      .map((c) =>
-        c.id === record.choreId && c.status === "done"
-          ? { ...c, status: "open" as const, completedAt: undefined, completedBy: undefined }
-          : c,
+    ok: true,
+    state: {
+      ...state,
+      chores: state.chores
+        .filter((c) => c.id !== record.spawnedId)
+        .map((c) =>
+          c.id === record.choreId
+            ? { ...c, status: "open" as const, completedAt: undefined, completedBy: undefined }
+            : c,
+        ),
+      roommates: state.roommates.map((r) =>
+        r.id === record.streakActorId ? { ...r, streak: Math.max(0, r.streak - 1) } : r,
       ),
-    roommates: state.roommates.map((r) =>
-      r.id === record.streakActorId ? { ...r, streak: Math.max(0, r.streak - 1) } : r,
-    ),
-    activity: state.activity.filter((e) => !eventIds.has(e.id)),
+      activity: state.activity.filter((e) => !eventIds.has(e.id)),
+    },
   };
 }
 
