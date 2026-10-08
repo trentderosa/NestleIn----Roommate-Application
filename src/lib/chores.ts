@@ -28,6 +28,13 @@ export function newId(prefix: string): ID {
   return `${prefix}_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
 }
 
+/**
+ * Where a transition gets new ids from. The store passes a deterministic
+ * source per action, so replaying an action (e.g. after a cross-tab race)
+ * produces the same ids and earlier Undo records stay valid.
+ */
+export type IdSource = (prefix: string) => ID;
+
 // ---------------------------------------------------------------------------
 // Selectors
 // ---------------------------------------------------------------------------
@@ -175,8 +182,8 @@ export function nextAssignee(current: ID, memberIds: ID[]): ID {
 // Transitions
 // ---------------------------------------------------------------------------
 
-function event(data: ActivityEventData, now: Date): ActivityEvent {
-  return { id: newId("evt"), at: now.toISOString(), reactions: {}, ...data };
+function event(data: ActivityEventData, now: Date, ids: IdSource): ActivityEvent {
+  return { id: ids("evt"), at: now.toISOString(), reactions: {}, ...data };
 }
 
 /**
@@ -190,20 +197,28 @@ export type UndoRecord =
       choreId: ID;
       /** Next occurrence created by the completion, if any. */
       spawnedId?: ID;
+      /** The next occurrence as created, to detect later edits to it. */
+      spawned?: Chore;
       eventIds: ID[];
       /** Roommate whose streak grew, if it did. */
       streakActorId?: ID;
     }
   | { kind: "delete"; chore: Chore; index: number };
 
-export function completeChore(state: HouseholdState, choreId: ID, now: Date): HouseholdState {
-  return completeChoreWithUndo(state, choreId, now).state;
+export function completeChore(
+  state: HouseholdState,
+  choreId: ID,
+  now: Date,
+  ids: IdSource = newId,
+): HouseholdState {
+  return completeChoreWithUndo(state, choreId, now, ids).state;
 }
 
 export function completeChoreWithUndo(
   state: HouseholdState,
   choreId: ID,
   now: Date,
+  ids: IdSource = newId,
 ): { state: HouseholdState; undo: UndoRecord | null } {
   const chore = state.chores.find((c) => c.id === choreId);
   if (!chore || chore.status === "done") return { state, undo: null };
@@ -227,6 +242,7 @@ export function completeChoreWithUndo(
         assigneeId: chore.assigneeId,
       },
       now,
+      ids,
     ),
   ];
 
@@ -235,26 +251,30 @@ export function completeChoreWithUndo(
   const anchorDay =
     chore.recurrence === "monthly" ? (chore.anchorDay ?? new Date(chore.dueAt).getDate()) : undefined;
   const nextDue = nextDueDate(chore.dueAt, chore.recurrence, now, anchorDay);
-  let spawnedId: ID | undefined;
+  let spawned: Chore | undefined;
   if (nextDue) {
     const assigneeId = chore.rotate
       ? nextAssignee(chore.assigneeId, state.household.memberIds)
       : chore.assigneeId;
-    spawnedId = newId("chore");
-    chores.push({
+    spawned = {
       ...chore,
-      id: spawnedId,
+      id: ids("chore"),
       assigneeId,
       dueAt: nextDue.toISOString(),
       anchorDay,
       status: "open",
       completedAt: undefined,
       completedBy: undefined,
-    });
+    };
+    chores.push(spawned);
     if (chore.rotate && assigneeId !== chore.assigneeId) {
       // 1ms later so it sorts above the completion in the feed.
       events.unshift(
-        event({ type: "rotated", choreTitle: chore.title, toId: assigneeId }, new Date(now.getTime() + 1)),
+        event(
+          { type: "rotated", choreTitle: chore.title, toId: assigneeId },
+          new Date(now.getTime() + 1),
+          ids,
+        ),
       );
     }
   }
@@ -268,7 +288,8 @@ export function completeChoreWithUndo(
     undo: {
       kind: "complete",
       choreId,
-      spawnedId,
+      spawnedId: spawned?.id,
+      spawned,
       eventIds: events.map((e) => e.id),
       streakActorId: onTime ? actorId : undefined,
     },
@@ -279,6 +300,7 @@ export function sendNudge(
   state: HouseholdState,
   input: { choreId: ID; tone: NudgeTone; message: string },
   now: Date,
+  ids: IdSource = newId,
 ): HouseholdState {
   const chore = state.chores.find((c) => c.id === input.choreId);
   const actorId = state.currentUserId;
@@ -296,7 +318,10 @@ export function sendNudge(
       message: input.message.trim(),
     },
     now,
+    ids,
   );
+  // Replaying the same action must not add the nudge twice.
+  if (state.activity.some((e) => e.id === nudge.id)) return state;
   return { ...state, activity: [nudge, ...state.activity] };
 }
 
@@ -306,6 +331,7 @@ export function saveChore(
   input: ChoreInput,
   now: Date,
   id?: ID,
+  ids: IdSource = newId,
 ): HouseholdState {
   const clean: ChoreInput = {
     ...input,
@@ -326,11 +352,13 @@ export function saveChore(
     };
   }
 
-  const choreId = newId("chore");
+  const choreId = ids("chore");
+  // Replaying the same create action must not add a second copy.
+  if (state.chores.some((c) => c.id === choreId)) return state;
   const chore: Chore = {
     ...clean,
     id: choreId,
-    seriesId: newId("series"),
+    seriesId: ids("series"),
     createdBy: state.currentUserId,
     createdAt: now.toISOString(),
     status: "open",
@@ -344,6 +372,7 @@ export function saveChore(
       assigneeId: chore.assigneeId,
     },
     now,
+    ids,
   );
   return { ...state, chores: [...state.chores, chore], activity: [created, ...state.activity] };
 }
@@ -398,6 +427,11 @@ export function undo(state: HouseholdState, record: UndoRecord): UndoResult {
   if (spawned?.status === "done") {
     return no(`The next “${original.title}” is already done, so this one can't be undone.`);
   }
+  if (spawned && record.spawned && choreEdited(record.spawned, spawned)) {
+    return no(
+      `The next “${original.title}” was changed after this was done, so undoing would throw those changes away. Edit it instead.`,
+    );
+  }
   // Reopening must not create a second open occurrence in the series.
   const otherOpen = state.chores.some(
     (c) => c.seriesId === original.seriesId && c.status === "open" && c.id !== record.spawnedId,
@@ -426,19 +460,55 @@ export function undo(state: HouseholdState, record: UndoRecord): UndoResult {
   };
 }
 
-export function toggleReaction(state: HouseholdState, eventId: ID, emoji: string): HouseholdState {
-  const me = state.currentUserId;
+/** Fields a person can change by editing a chore. */
+const EDITABLE: (keyof Chore)[] = [
+  "title",
+  "description",
+  "category",
+  "assigneeId",
+  "dueAt",
+  "recurrence",
+  "rotate",
+  "points",
+  "anchorDay",
+];
+
+function choreEdited(before: Chore, after: Chore): boolean {
+  return EDITABLE.some((k) => before[k] !== after[k]);
+}
+
+/**
+ * Set whether `userId` reacted with `emoji`. Idempotent (unlike a toggle), so
+ * it is safe to replay.
+ */
+export function setReaction(
+  state: HouseholdState,
+  eventId: ID,
+  emoji: string,
+  userId: ID,
+  on: boolean,
+): HouseholdState {
+  const target = state.activity.find((e) => e.id === eventId);
+  if (!target) return state;
+  const who = target.reactions[emoji] ?? [];
+  if (who.includes(userId) === on) return state;
+  const next = on ? [...who, userId] : who.filter((id) => id !== userId);
   return {
     ...state,
     activity: state.activity.map((e) => {
       if (e.id !== eventId) return e;
-      const who = e.reactions[emoji] ?? [];
-      const next = who.includes(me) ? who.filter((id) => id !== me) : [...who, me];
       const reactions = { ...e.reactions, [emoji]: next };
       if (next.length === 0) delete reactions[emoji];
       return { ...e, reactions };
     }),
   };
+}
+
+/** Flip the current user's reaction. Convenience for tests and one-off use. */
+export function toggleReaction(state: HouseholdState, eventId: ID, emoji: string): HouseholdState {
+  const me = state.currentUserId;
+  const mine = state.activity.find((e) => e.id === eventId)?.reactions[emoji]?.includes(me) ?? false;
+  return setReaction(state, eventId, emoji, me, !mine);
 }
 
 // ---------------------------------------------------------------------------

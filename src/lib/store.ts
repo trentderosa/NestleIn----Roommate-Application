@@ -18,7 +18,13 @@
 import { useSyncExternalStore } from "react";
 import * as logic from "./chores";
 import { createSeedState } from "./mock-data";
-import { createHouseholdStore, type HouseholdStore, type Snapshot, type StorageLike } from "./store-core";
+import {
+  createHouseholdStore,
+  type HouseholdStore,
+  type Outcome,
+  type Snapshot,
+  type StorageLike,
+} from "./store-core";
 import type { ChoreInput, HouseholdState, ID, NudgeTone } from "./types";
 
 /** localStorage, or null if the browser blocks it entirely. */
@@ -99,76 +105,91 @@ export function useNow(): Date {
 }
 
 /**
- * Every write goes through `getStore().update(transition)`, which applies the
- * transition to the *latest* saved data (possibly written by another tab).
- * Results are read from inside the transition so they describe what actually
- * happened, not what this tab's stale copy predicted.
+ * Every change is dispatched as an Action with a stable id (see
+ * store-core.ts). The store applies it to the *latest* saved data, possibly
+ * written by another tab, and may replay it later; `at` and `ids` are fixed
+ * when the action is created, so every replay produces the same result.
  */
+function act<R>(run: (state: HouseholdState, ids: logic.IdSource, at: Date) => Outcome<R>): Outcome<R> {
+  const at = new Date();
+  return getStore().dispatch<R>({ id: logic.newId("act"), run: (s, ids) => run(s, ids, at) });
+}
+
 export const actions = {
   /**
    * Returns an undo record for exactly this completion, or null if nothing
-   * changed (e.g. another tab already finished it).
+   * changed (e.g. another tab already finished it, or removed it).
    */
   completeChore(choreId: ID): logic.UndoRecord | null {
-    let record: logic.UndoRecord | null = null;
-    getStore().update((s) => {
-      const result = logic.completeChoreWithUndo(s, choreId, new Date());
-      record = result.undo;
-      return result.state;
+    const out = act<logic.UndoRecord | null>((s, ids, at) => {
+      if (!s.chores.some((c) => c.id === choreId)) {
+        return { state: s, result: null, conflict: "A chore you marked done was removed in another tab." };
+      }
+      const r = logic.completeChoreWithUndo(s, choreId, at, ids);
+      return { state: r.state, result: r.undo };
     });
-    return record;
+    return out.result ?? null;
   },
   /** Returns false if the nudge wasn't sent (cooldown, already done, gone). */
   sendNudge(input: { choreId: ID; tone: NudgeTone; message: string }): boolean {
-    let sent = false;
-    getStore().update((s) => {
-      const next = logic.sendNudge(s, input, new Date());
-      sent = next !== s;
-      return next;
+    const out = act<boolean>((s, ids, at) => {
+      const next = logic.sendNudge(s, input, at, ids);
+      return { state: next, result: next !== s };
     });
-    return sent;
+    return out.result ?? false;
   },
   /** Returns false when editing a chore that no longer exists. */
   saveChore(input: ChoreInput, id?: ID): boolean {
-    let saved = false;
-    getStore().update((s) => {
-      saved = !id || s.chores.some((c) => c.id === id);
-      return saved ? logic.saveChore(s, input, new Date(), id) : s;
+    const out = act<boolean>((s, ids, at) => {
+      if (id && !s.chores.some((c) => c.id === id)) {
+        return {
+          state: s,
+          result: false,
+          conflict: `Your edit to “${input.title.trim()}” couldn't be saved because it was deleted in another tab.`,
+        };
+      }
+      return { state: logic.saveChore(s, input, at, id, ids), result: true };
     });
-    return saved;
+    return !out.conflict && out.result === true;
   },
   /** Returns an undo record for exactly this deletion (null if nothing changed). */
   deleteChore(id: ID): logic.UndoRecord | null {
-    let record: logic.UndoRecord | null = null;
-    getStore().update((s) => {
-      const result = logic.deleteChoreWithUndo(s, id);
-      record = result.undo;
-      return result.state;
+    const out = act<logic.UndoRecord | null>((s) => {
+      const r = logic.deleteChoreWithUndo(s, id);
+      return { state: r.state, result: r.undo };
     });
-    return record;
+    return out.result ?? null;
   },
   /** Reverse one earlier operation, or explain why it can't be. */
   undo(record: logic.UndoRecord): { ok: true } | { ok: false; reason: string } {
-    let outcome: { ok: true } | { ok: false; reason: string } = { ok: true };
-    getStore().update((s) => {
-      const result = logic.undo(s, record);
-      outcome = result.ok ? { ok: true } : { ok: false, reason: result.reason };
-      return result.state;
+    const out = act<logic.UndoResult>((s) => {
+      const r = logic.undo(s, record);
+      return { state: r.state, result: r };
     });
-    return outcome;
+    const r = out.result!;
+    return r.ok ? { ok: true } : { ok: false, reason: r.reason };
   },
   toggleReaction(eventId: ID, emoji: string) {
-    getStore().update((s) => logic.toggleReaction(s, eventId, emoji));
+    // Decide add/remove now, from what's on screen, so a replay sets the same thing.
+    const shown = getStore().getSnapshot().state;
+    const me = shown.currentUserId;
+    const on = !shown.activity.find((e) => e.id === eventId)?.reactions[emoji]?.includes(me);
+    act((s) => ({ state: logic.setReaction(s, eventId, emoji, me, on) }));
   },
   switchUser(id: ID) {
-    getStore().update((s) => (s.currentUserId === id ? s : { ...s, currentUserId: id }));
+    act((s) => ({ state: s.currentUserId === id ? s : { ...s, currentUserId: id } }));
   },
   /** Start over from the demo seed. The previous data is kept as a backup. */
   resetDemo() {
     getStore().reset();
   },
+  /** Replay unsaved changes on the latest saved data and save again. */
   retrySave() {
     return getStore().retrySave();
+  },
+  /** Throw away unsaved changes (after a conflict). */
+  discardPending() {
+    getStore().discardPending();
   },
   dismissRecovery() {
     getStore().dismissRecovery();

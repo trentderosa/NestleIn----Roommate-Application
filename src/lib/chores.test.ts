@@ -10,10 +10,12 @@ import {
   nudgeCooldownRemaining,
   saveChore,
   sendNudge,
+  setReaction,
   toggleReaction,
   undo,
 } from "./chores";
 import { createSeedState } from "./mock-data";
+import { idsFor } from "./store-core";
 import { HOUR, MINUTE } from "./time";
 
 const NOW = new Date(2026, 9, 7, 15, 0); // Wed Oct 7 2026, 3:00 PM local
@@ -264,5 +266,57 @@ describe("undo safety", () => {
     const restored = undo(del.state, del.undo!);
     expect(restored.ok).toBe(true);
     expect(undo(restored.state, del.undo!)).toMatchObject({ ok: false });
+  });
+});
+
+describe("replay safety", () => {
+  // Fix 6
+  it("refuses to undo when the next occurrence was edited since, and keeps the edits", () => {
+    const a = completeChoreWithUndo(seed(), "chore_counters", NOW);
+    const record = a.undo!;
+    const spawnedId = record.kind === "complete" ? record.spawnedId! : "";
+    const spawned = a.state.chores.find((c) => c.id === spawnedId)!;
+    const edited = saveChore(a.state, { ...spawned, title: "Wipe counters + stovetop" }, NOW, spawnedId);
+
+    const result = undo(edited, record);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toMatch(/was changed after this was done/);
+    expect(result.state).toBe(edited);
+    expect(result.state.chores.find((c) => c.id === spawnedId)!.title).toBe("Wipe counters + stovetop");
+  });
+
+  it("still undoes when the next occurrence is untouched", () => {
+    const a = completeChoreWithUndo(seed(), "chore_counters", NOW);
+    expect(undo(a.state, a.undo!).ok).toBe(true);
+  });
+
+  // Fix 5
+  it("deterministic ids make a replayed completion identical", () => {
+    const first = completeChoreWithUndo(seed(), "chore_trash", NOW, idsFor("act_1"));
+    const again = completeChoreWithUndo(seed(), "chore_trash", NOW, idsFor("act_1"));
+    expect(again.undo).toEqual(first.undo);
+    expect(again.state.activity.map((e) => e.id)).toEqual(first.state.activity.map((e) => e.id));
+  });
+
+  it("replaying create, nudge, and reaction actions doesn't duplicate them", () => {
+    const input = {
+      title: "Descale kettle",
+      category: "kitchen" as const,
+      assigneeId: "ellie",
+      dueAt: NOW.toISOString(),
+      recurrence: "once" as const,
+      rotate: false,
+      points: 1 as const,
+    };
+    const created = saveChore(seed(), input, NOW, undefined, idsFor("act_c"));
+    expect(saveChore(created, input, NOW, undefined, idsFor("act_c"))).toBe(created);
+
+    const nudge = { choreId: "chore_dishwasher", tone: "sweet" as const, message: "hi" };
+    const nudged = sendNudge(seed(), nudge, NOW, idsFor("act_n"));
+    expect(sendNudge(nudged, nudge, NOW, idsFor("act_n"))).toBe(nudged);
+
+    const on = setReaction(seed(), "evt_soap", "💕", "krystiana", true);
+    expect(setReaction(on, "evt_soap", "💕", "krystiana", true)).toBe(on);
   });
 });
