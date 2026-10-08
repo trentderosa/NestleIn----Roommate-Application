@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
 import { Shuffle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
@@ -9,6 +10,7 @@ import { actions } from "@/lib/store";
 import { dueLabel } from "@/lib/time";
 import type { Chore, HouseholdState, NudgeTone, Roommate } from "@/lib/types";
 import { Avatar } from "./avatar";
+import { announce } from "./live-announcer";
 
 const TONES: { value: NudgeTone; label: string; emoji: string; className: string }[] = [
   { value: "sweet", label: "Sweet", emoji: "💕", className: "data-[active=true]:bg-blush-50 data-[active=true]:ring-blush-700" },
@@ -68,6 +70,11 @@ function NudgeForm({
   const [index, setIndex] = useState(0);
   const [message, setMessage] = useState(suggestions.sweet[0]);
   const [sent, setSent] = useState(false);
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+
+  // If this sheet unmounts (closed early, or reopened for another chore), its
+  // pending auto-close must not fire and close whichever sheet is open next.
+  useEffect(() => () => clearTimeout(closeTimer.current), []);
 
   const coolingDown = nudgeCooldownRemaining(state, chore.id, state.currentUserId, now) > 0;
   const late = isOverdue(chore, now);
@@ -86,14 +93,20 @@ function NudgeForm({
 
   function send() {
     if (sent || coolingDown || !message.trim()) return;
-    actions.sendNudge({ choreId: chore.id, tone, message });
+    if (!actions.sendNudge({ choreId: chore.id, tone, message })) {
+      // Another tab nudged or finished it in the meantime.
+      toast("Nudge not sent", { description: "It was already nudged or finished." });
+      onClose();
+      return;
+    }
     setSent(true);
-    setTimeout(onClose, CONFIRM_MS);
+    announce(`Nudge sent to ${assignee.name}.`);
+    closeTimer.current = setTimeout(onClose, CONFIRM_MS);
   }
 
   if (sent) {
     return (
-      <div className="flex flex-col items-center px-6 py-12 text-center" aria-live="polite">
+      <div className="flex flex-col items-center px-6 py-12 text-center">
         <span className="animate-pop text-6xl" aria-hidden>
           💌
         </span>

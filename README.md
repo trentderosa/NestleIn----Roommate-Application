@@ -37,7 +37,7 @@ npm run dev
 
 Open http://localhost:3000. Mobile is the primary target, so try it in your browser's device toolbar.
 
-To start the demo over, use **Roommates → Reset demo data** or clear `localStorage`.
+To start the demo over, use **Roommates → Reset demo data** or clear `localStorage`. Resetting (and recovering from unreadable saved data) keeps the previous data under the `nestlein:household:backup` key.
 
 ## Scripts
 
@@ -62,7 +62,9 @@ src/
     types.ts              domain model
     mock-data.ts          The Pink Palace seed (relative to "now")
     chores.ts             pure selectors + state transitions (tested)
-    store.ts              client store: useHousehold(), useNow(), actions
+    validate.ts           runtime validation of saved data (tested)
+    store-core.ts         persistence: recovery, save status, cross-tab sync (tested)
+    store.ts              React bindings: useHousehold(), useNow(), actions
     design.ts             accent + category maps
     time.ts               date helpers + friendly labels
 ```
@@ -70,6 +72,8 @@ src/
 ## Current limitations
 
 - No backend or auth. State lives in one browser and isn't shared between devices or roommates.
+- Tabs in the same browser stay in sync, and an action in a stale tab is applied on top of the latest saved data. localStorage has no atomic compare-and-swap, so a lost race is detected and repaired afterwards; only each tab's most recent action is kept for that repair. A real backend replaces this.
+- If storage is blocked or full, the app keeps working in memory and shows a banner saying changes aren't being saved.
 - Nudges are recorded in the feed only. No push, email, or SMS.
 - "You" is switched manually (Roommates → prototype controls).
 - Seed dates are generated when the demo first loads, so a long-lived demo slowly drifts. Reset to refresh it.
