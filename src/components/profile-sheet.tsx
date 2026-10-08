@@ -14,6 +14,7 @@ import {
   STATUS_QUICK_PICKS,
   achievementsFor,
   activeStatus,
+  statusClearAfter,
   upcomingFor,
 } from "@/lib/profile";
 import { actions, useHousehold, useNow } from "@/lib/store";
@@ -123,9 +124,12 @@ export function ProfileSheetHost() {
         className={cn(
           "gap-0 overflow-y-auto border-none bg-cream p-0",
           isDesktop
-            ? "h-full w-full data-[side=right]:w-full data-[side=right]:sm:max-w-[420px]"
+            ? "h-full max-h-dvh w-full data-[side=right]:w-full data-[side=right]:sm:max-w-[420px]"
             : // Same variant as the base sheet's `h-auto`, so it overrides it.
-              "rounded-t-[24px] pb-[max(1.5rem,env(safe-area-inset-bottom))] data-[side=bottom]:h-[90dvh]",
+              cn(
+                "rounded-t-[24px] data-[side=bottom]:max-h-[90dvh]",
+                isOwner ? "data-[side=bottom]:h-[90dvh]" : "data-[side=bottom]:h-auto",
+              ),
         )}
       >
         {roommate && state && (
@@ -197,54 +201,23 @@ export function ProfileView({
 }) {
   const isOwner = roommate.id === state.currentUserId;
   const [editing, setEditing] = useState(false);
+  const editButton = useRef<HTMLButtonElement>(null);
+  const returnToEdit = useRef(false);
+  useEffect(() => {
+    if (!editing && returnToEdit.current) {
+      editButton.current?.focus();
+      returnToEdit.current = false;
+    }
+  }, [editing]);
+  function finishEditing() {
+    returnToEdit.current = true;
+    setEditing(false);
+  }
   const status = activeStatus(roommate, now);
   const upcoming = upcomingFor(state, roommate.id, 5);
 
-  return (
-    <div className="space-y-7 px-5 pt-4 pb-8 md:pt-10">
-      {/* 1. Header */}
-      <header className="flex items-center gap-4">
-        <Avatar roommate={roommate} size="profile" badge />
-        <div className="min-w-0 flex-1">
-          <h2 className="font-display text-2xl leading-tight font-bold text-plum">
-            {roommate.name}
-            {isOwner && <span className="ml-1.5 font-sans text-sm font-semibold text-plum-soft">(you)</span>}
-          </h2>
-          <p className="mt-0.5 text-sm text-plum-soft" data-testid="profile-status">
-            {status ? (
-              <>
-                {status.emoji && <span className="mr-1">{status.emoji}</span>}
-                {status.text}
-              </>
-            ) : isOwner ? (
-              "No status yet"
-            ) : (
-              "No status"
-            )}
-          </p>
-        </div>
-        {isOwner && !editing && (
-          <button
-            type="button"
-            onClick={() => setEditing(true)}
-            className="inline-flex h-11 shrink-0 items-center gap-1.5 rounded-full bg-white px-4 text-sm font-semibold text-plum shadow-soft"
-          >
-            <Pencil className="size-4" aria-hidden /> Edit
-          </button>
-        )}
-      </header>
-
-      {!isOwner && roommate.streak > 0 && (
-        <p className="inline-flex items-center gap-1.5 rounded-full bg-coral-50 px-3 py-1.5 text-sm font-semibold text-coral-700">
-          <Flame className="size-4" aria-hidden /> {roommate.streak} on time in a row
-        </p>
-      )}
-
-      {/* 2. Status editor */}
-      {isOwner && editing && (
-        <StatusEditor roommate={roommate} now={now} onDone={() => setEditing(false)} />
-      )}
-
+  const details = (
+    <>
       {/* 3. Upcoming chores */}
       <section aria-labelledby="profile-upcoming">
         <div className="mb-2 flex items-center justify-between">
@@ -277,6 +250,56 @@ export function ProfileView({
       {/* 4–5. Private to the owner */}
       {isOwner && <PrivateStats state={state} roommate={roommate} now={now} />}
       {isOwner && <Achievements state={state} roommate={roommate} now={now} />}
+    </>
+  );
+
+  return (
+    <div className={cn("space-y-7 px-5 pt-4 md:pt-10", editing && isOwner ? "pb-0" : "pb-[max(2rem,env(safe-area-inset-bottom))]")}>
+      {/* 1. Header */}
+      <header className="flex items-center gap-3">
+        <Avatar roommate={roommate} size="profile" badge />
+        <div className="min-w-0 flex-1">
+          <h2 className="font-display text-2xl leading-tight font-bold text-plum">
+            {roommate.name}
+            {isOwner && <span className="ml-1.5 font-sans text-sm font-semibold text-plum-soft">(you)</span>}
+          </h2>
+          <p className="mt-0.5 truncate text-sm text-plum-soft" data-testid="profile-status">
+            {status ? (
+              <>
+                {status.emoji && <span className="mr-1">{status.emoji}</span>}
+                {status.text}
+              </>
+            ) : isOwner ? (
+              "No status yet"
+            ) : (
+              "No status"
+            )}
+          </p>
+        </div>
+        {isOwner && !editing && (
+          <button
+            type="button"
+            ref={editButton}
+            aria-label="Edit status"
+            onClick={() => setEditing(true)}
+            className="inline-flex size-11 shrink-0 items-center justify-center rounded-full bg-white text-sm font-semibold text-plum shadow-soft"
+          >
+            <Pencil className="size-4" aria-hidden />
+          </button>
+        )}
+      </header>
+
+      {!isOwner && roommate.streak > 0 && (
+        <p className="inline-flex items-center gap-1.5 rounded-full bg-coral-50 px-3 py-1.5 text-sm font-semibold text-coral-700">
+          <Flame className="size-4" aria-hidden /> {roommate.streak} on time in a row
+        </p>
+      )}
+
+      {isOwner && editing ? (
+        <StatusEditor roommate={roommate} now={now} onDone={finishEditing}>
+          {details}
+        </StatusEditor>
+      ) : details}
     </div>
   );
 }
@@ -324,7 +347,7 @@ function PrivateStats({ state, roommate, now }: { state: HouseholdState; roommat
   const tiles = [
     { label: "on-time streak", value: roommate.streak },
     { label: "done this week", value: stats.doneThisWeek },
-    { label: "on time", value: `${stats.reliability}%` },
+    { label: "on time", value: stats.completed === 0 ? 0 : stats.reliability, suffix: "%" },
   ];
   return (
     <section aria-labelledby="profile-stats">
@@ -336,7 +359,7 @@ function PrivateStats({ state, roommate, now }: { state: HouseholdState; roommat
         {tiles.map((t) => (
           <div key={t.label} className="flex flex-col-reverse rounded-2xl bg-white px-1 py-3 shadow-soft">
             <dt className="text-[11px] leading-tight font-medium text-plum-soft">{t.label}</dt>
-            <dd className="font-display text-2xl font-bold text-plum tabular-nums">{t.value}</dd>
+            <dd className={t.value === 0 ? "py-1 text-xs font-medium text-plum-soft" : "font-display text-2xl font-bold text-plum tabular-nums"}>{t.value === 0 ? "Fresh week ✨" : `${t.value}${t.suffix ?? ""}`}</dd>
           </div>
         ))}
       </dl>
@@ -361,7 +384,7 @@ function Achievements({ state, roommate, now }: { state: HouseholdState; roommat
             key={b.id}
             className={cn(
               "flex items-start gap-2.5 rounded-2xl p-3",
-              b.earned ? "bg-white shadow-soft" : "border border-dashed border-input bg-cream-deep/40",
+              b.earned ? "bg-white shadow-soft" : "col-span-2 border border-dashed border-input bg-cream-deep/40",
             )}
           >
             <span aria-hidden className={cn("text-2xl leading-none", !b.earned && "opacity-50 grayscale")}>
@@ -390,11 +413,15 @@ function Achievements({ state, roommate, now }: { state: HouseholdState; roommat
 
 // ---------------------------------------------------------- status editor
 
-function StatusEditor({ roommate, now, onDone }: { roommate: Roommate; now: Date; onDone: () => void }) {
+function StatusEditor({ roommate, now, onDone, children }: { roommate: Roommate; now: Date; onDone: () => void; children: React.ReactNode }) {
   const current = activeStatus(roommate, now);
   const [text, setText] = useState(current?.text ?? "");
   const [emoji, setEmoji] = useState(current?.emoji ?? "");
-  const [clearAfter, setClearAfter] = useState<StatusClearAfter>("never");
+  const [clearAfter, setClearAfter] = useState<StatusClearAfter>(() => statusClearAfter(roommate, now));
+  const input = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    input.current?.focus();
+  }, []);
   const length = Array.from(text).length;
 
   function save(next: { text: string; emoji: string; clearAfter: StatusClearAfter }) {
@@ -410,106 +437,109 @@ function StatusEditor({ roommate, now, onDone }: { roommate: Roommate; now: Date
   return (
     <form
       aria-label="Edit your status"
-      className="space-y-5 rounded-3xl bg-white p-4 shadow-soft"
+      className="space-y-7"
       onSubmit={(e) => {
         e.preventDefault();
         save({ text, emoji, clearAfter });
       }}
     >
-      <div>
-        <div className="mb-1.5 flex items-baseline justify-between">
-          <label htmlFor="status-text" className="text-sm font-semibold text-plum">
-            Your status
-          </label>
-          <span className="text-xs text-plum-soft tabular-nums" aria-live="off">
-            {length}/{STATUS_MAX_LENGTH}
-          </span>
-        </div>
-        <input
-          id="status-text"
-          value={text}
-          onChange={(e) => setText(Array.from(e.target.value).slice(0, STATUS_MAX_LENGTH).join(""))}
-          placeholder="What's up?"
-          autoComplete="off"
-          className="h-11 w-full rounded-2xl border border-input bg-cream px-4 text-plum outline-none placeholder:text-plum-soft focus:border-lilac-700"
-        />
-      </div>
-
-      <fieldset>
-        <legend className="mb-1.5 text-sm font-semibold text-plum">Emoji</legend>
-        <div className="flex flex-wrap gap-1.5">
-          {["", ...STATUS_EMOJI].map((e) => (
-            <label
-              key={e || "none"}
-              className={cn(
-                "grid size-11 cursor-pointer place-items-center rounded-xl text-xl transition has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-lilac-700",
-                emoji === e ? "bg-lilac-50 ring-2 ring-plum" : "bg-cream",
-              )}
-            >
-              <input
-                type="radio"
-                name="status-emoji"
-                value={e}
-                checked={emoji === e}
-                onChange={() => setEmoji(e)}
-                className="sr-only"
-                aria-label={e ? `Emoji ${e}` : "No emoji"}
-              />
-              <span aria-hidden className={cn(!e && "text-xs font-semibold text-plum-soft")}>
-                {e || "none"}
-              </span>
+      <div className="space-y-5 rounded-3xl bg-white p-4 shadow-soft">
+        <div>
+          <div className="mb-1.5 flex items-baseline justify-between">
+            <label htmlFor="status-text" className="text-sm font-semibold text-plum">
+              Your status
             </label>
-          ))}
+            <span className="text-xs text-plum-soft tabular-nums" aria-live="off">
+              {length}/{STATUS_MAX_LENGTH}
+            </span>
+          </div>
+          <input
+            ref={input}
+            id="status-text"
+            value={text}
+            onChange={(e) => setText(Array.from(e.target.value).slice(0, STATUS_MAX_LENGTH).join(""))}
+            placeholder="What's up?"
+            autoComplete="off"
+            className="h-11 w-full rounded-2xl border border-input bg-cream px-4 text-plum outline-none placeholder:text-plum-soft focus:border-lilac-700"
+          />
         </div>
-      </fieldset>
 
-      <div>
-        <p className="mb-1.5 text-sm font-semibold text-plum" id="quick-picks">
-          Quick picks
-        </p>
-        <div className="flex flex-wrap gap-1.5" role="group" aria-labelledby="quick-picks">
-          {STATUS_QUICK_PICKS.map((q) => (
-            <button
-              key={q.text}
-              type="button"
-              onClick={() => {
-                setText(q.text);
-                setEmoji(q.emoji);
-              }}
-              className="inline-flex min-h-11 items-center gap-1.5 rounded-full bg-cream px-3.5 text-sm font-medium text-plum"
-            >
-              <span aria-hidden>{q.emoji}</span> {q.text}
-            </button>
-          ))}
+        <fieldset className="min-w-0">
+          <legend className="mb-1.5 text-sm font-semibold text-plum">Emoji</legend>
+          <div className="flex gap-1.5 overflow-x-auto p-1">
+            {["", ...STATUS_EMOJI].map((e) => (
+              <label
+                key={e || "none"}
+                className={cn(
+                  "grid size-11 shrink-0 cursor-pointer place-items-center rounded-xl text-xl transition has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-lilac-700",
+                  emoji === e ? "bg-lilac-50 ring-2 ring-plum" : "bg-cream",
+                )}
+              >
+                <input
+                  type="radio"
+                  name="status-emoji"
+                  value={e}
+                  checked={emoji === e}
+                  onChange={() => setEmoji(e)}
+                  className="sr-only"
+                  aria-label={e ? `Emoji ${e}` : "No emoji"}
+                />
+                <span aria-hidden className={cn(!e && "text-xs font-semibold text-plum-soft")}>
+                  {e || "none"}
+                </span>
+              </label>
+            ))}
+          </div>
+        </fieldset>
+
+        <div>
+          <p className="mb-1.5 text-sm font-semibold text-plum" id="quick-picks">
+            Quick picks
+          </p>
+          <div className="flex gap-1.5 overflow-x-auto p-1" role="group" aria-labelledby="quick-picks">
+            {STATUS_QUICK_PICKS.map((q) => (
+              <button
+                key={q.text}
+                type="button"
+                onClick={() => {
+                  setText(q.text);
+                  setEmoji(q.emoji);
+                }}
+                className="inline-flex min-h-11 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full bg-cream px-3.5 text-sm font-medium text-plum"
+              >
+                <span aria-hidden>{q.emoji}</span> {q.text}
+              </button>
+            ))}
+          </div>
         </div>
+
+        <fieldset className="min-w-0">
+          <legend className="mb-1.5 text-sm font-semibold text-plum">Clear after</legend>
+          <div className="flex flex-wrap gap-1.5">
+            {(Object.keys(CLEAR_AFTER_LABELS) as StatusClearAfter[]).map((k) => (
+              <label
+                key={k}
+                className={cn(
+                  "inline-flex min-h-11 cursor-pointer items-center rounded-full px-4 text-sm font-semibold transition has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-lilac-700",
+                  clearAfter === k ? "bg-plum text-cream" : "bg-cream text-plum",
+                )}
+              >
+                <input
+                  type="radio"
+                  name="status-clear-after"
+                  value={k}
+                  checked={clearAfter === k}
+                  onChange={() => setClearAfter(k)}
+                  className="sr-only"
+                />
+                {CLEAR_AFTER_LABELS[k]}
+              </label>
+            ))}
+          </div>
+        </fieldset>
       </div>
-
-      <fieldset>
-        <legend className="mb-1.5 text-sm font-semibold text-plum">Clear after</legend>
-        <div className="flex flex-wrap gap-1.5">
-          {(Object.keys(CLEAR_AFTER_LABELS) as StatusClearAfter[]).map((k) => (
-            <label
-              key={k}
-              className={cn(
-                "inline-flex min-h-11 cursor-pointer items-center rounded-full px-4 text-sm font-semibold transition has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-lilac-700",
-                clearAfter === k ? "bg-plum text-cream" : "bg-cream text-plum",
-              )}
-            >
-              <input
-                type="radio"
-                name="status-clear-after"
-                value={k}
-                checked={clearAfter === k}
-                onChange={() => setClearAfter(k)}
-                className="sr-only"
-              />
-              {CLEAR_AFTER_LABELS[k]}
-            </label>
-          ))}
-        </div>
-      </fieldset>
-
-      <div className="flex flex-wrap items-center gap-2">
+      {children}
+      <div className="sticky bottom-0 z-10 -mx-5 flex flex-wrap items-center gap-1 border-t border-border bg-cream px-3 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
         <button
           type="submit"
           disabled={!text.trim() && !emoji}

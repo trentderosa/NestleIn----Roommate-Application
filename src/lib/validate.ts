@@ -182,6 +182,7 @@ function check(value: unknown): HouseholdState {
     statusText(r.status, `${p}.status`);
     emojiText(r.statusEmoji, `${p}.statusEmoji`);
     if (r.statusExpiresAt !== undefined) date(r.statusExpiresAt, `${p}.statusExpiresAt`);
+    if (r.statusClearAfter !== undefined) oneOf(r.statusClearAfter, new Set(["today", "week", "never"]), `${p}.statusClearAfter`);
     if (r.statusUpdatedAt !== undefined) date(r.statusUpdatedAt, `${p}.statusUpdatedAt`);
     int(r.streak, `${p}.streak`, 0);
     const h = record(r.history, `${p}.history`);

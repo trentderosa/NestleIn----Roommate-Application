@@ -72,3 +72,20 @@ describe("StorageNotice", () => {
     expect(screen.queryByText(/couldn't be saved/)).toBeNull();
   });
 });
+
+it("shows the reload notice when another tab saves a future schema", () => {
+  window.localStorage.clear();
+  render(<StorageNotice />);
+  act(() => { actions.resetDemo(); });
+  const saved = JSON.parse(window.localStorage.getItem(STORAGE_KEY)!);
+  saved.state.version = 3;
+  const raw = JSON.stringify(saved);
+  act(() => {
+    window.localStorage.setItem(STORAGE_KEY, raw);
+    window.dispatchEvent(new StorageEvent("storage", { key: STORAGE_KEY }));
+  });
+  expect(screen.getByText("NestleIn was updated in another tab, reload to continue.")).toBeTruthy();
+  expect(screen.queryByText(/Storage is full/)).toBeNull();
+  act(() => { actions.retrySave(); actions.resetDemo(); });
+  expect(window.localStorage.getItem(STORAGE_KEY)).toBe(raw);
+});

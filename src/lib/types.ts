@@ -24,6 +24,8 @@ export type Roommate = {
   statusEmoji: string;
   /** When the status stops showing (ISO). Unset = until it's changed. */
   statusExpiresAt?: string;
+  /** The selected expiry option, preserved when editing. */
+  statusClearAfter?: StatusClearAfter;
   /** When the roommate last set their status (ISO). */
   statusUpdatedAt?: string;
   /** Chores finished on time in a row. Grows on time, never punishes (late just doesn't count). */

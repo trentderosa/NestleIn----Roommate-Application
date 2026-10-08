@@ -41,6 +41,14 @@ export function statusExpiry(clearAfter: StatusClearAfter, now: Date): string | 
   return end.toISOString();
 }
 
+/** Recover the selection for earlier v2 saves that only recorded timestamps. */
+export function statusClearAfter(roommate: Roommate, now: Date): StatusClearAfter {
+  if (!activeStatus(roommate, now) || !roommate.statusExpiresAt) return "never";
+  if (roommate.statusClearAfter) return roommate.statusClearAfter;
+  const setAt = new Date(roommate.statusUpdatedAt ?? now);
+  return roommate.statusExpiresAt === statusExpiry("today", setAt) ? "today" : "week";
+}
+
 /** The status to show right now, or null if none / expired. */
 export function activeStatus(roommate: Roommate, now: Date): { text: string; emoji: string } | null {
   if (!roommate.status && !roommate.statusEmoji) return null;
@@ -75,6 +83,7 @@ export function setStatus(
     status: text,
     statusEmoji: emoji,
     statusExpiresAt: clearing ? undefined : statusExpiry(input.clearAfter, now),
+    statusClearAfter: clearing ? undefined : input.clearAfter,
     statusUpdatedAt: now.toISOString(),
   };
   const roommates = state.roommates.map((r) => (r.id === actorId ? updated : r));

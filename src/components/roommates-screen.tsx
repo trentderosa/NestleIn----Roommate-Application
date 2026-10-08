@@ -146,31 +146,37 @@ function RoommateCard({ roommate, state, now }: { roommate: Roommate; state: Hou
           </p>
         )}
 
-        <dl className="mt-4 grid grid-cols-3 gap-2 text-center">
-          <Stat label={isMe ? "on your list" : "on their list"} value={stats.open.length} className={accent.soft} />
-          <Stat label="done this week" value={stats.doneThisWeek} className={accent.soft} />
-          <Stat label="pts this week" value={stats.pointsThisWeek} className={accent.soft} />
-        </dl>
+        {isMe && (
+          <>
+            <dl className="mt-4 grid grid-cols-3 gap-2 text-center">
+              <Stat label="on your list" value={stats.open.length} className={accent.soft} />
+              <Stat label="done this week" value={stats.doneThisWeek} className={accent.soft} />
+              <Stat label="pts this week" value={stats.pointsThisWeek} className={accent.soft} />
+            </dl>
 
-        <div className="mt-4">
-          <div className="flex justify-between text-sm">
-            <span className="font-semibold text-plum">Shows up on time</span>
-            <span className="font-semibold text-plum">{stats.reliability}%</span>
-          </div>
-          <div
-            className="mt-1.5 h-2.5 overflow-hidden rounded-full bg-cream-deep"
-            role="progressbar"
-            aria-label={`${roommate.name} on-time rate`}
-            aria-valuenow={stats.reliability}
-            aria-valuemin={0}
-            aria-valuemax={100}
-          >
-            <div
-              className={cn("h-full rounded-full bg-gradient-to-r", accent.gradient)}
-              style={{ width: `${stats.reliability}%` }}
-            />
-          </div>
-        </div>
+            <div className="mt-4">
+              <div className="flex justify-between text-sm">
+                <span className="font-semibold text-plum">Shows up on time</span>
+                <span className={stats.reliability === 0 ? "font-medium text-plum-soft" : "font-semibold text-plum"}>
+                  {stats.reliability === 0 ? "Fresh week ✨" : `${stats.reliability}%`}
+                </span>
+              </div>
+              <div
+                className="mt-1.5 h-2.5 overflow-hidden rounded-full bg-cream-deep"
+                role="progressbar"
+                aria-label={`${roommate.name} on-time rate`}
+                aria-valuenow={stats.reliability}
+                aria-valuemin={0}
+                aria-valuemax={100}
+              >
+                <div
+                  className={cn("h-full rounded-full bg-gradient-to-r", accent.gradient)}
+                  style={{ width: `${stats.reliability}%` }}
+                />
+              </div>
+            </div>
+          </>
+        )}
 
         {stats.open.length > 0 && (
           <div className="mt-4">
@@ -203,7 +209,7 @@ function RoommateCard({ roommate, state, now }: { roommate: Roommate; state: Hou
 function Stat({ label, value, className }: { label: string; value: number; className?: string }) {
   return (
     <div className={cn("rounded-2xl px-1 py-2.5", className)}>
-      <dd className="font-display text-2xl font-bold text-plum">{value}</dd>
+      <dd className={value === 0 ? "text-xs font-medium text-plum-soft" : "font-display text-2xl font-bold text-plum"}>{value === 0 ? "Fresh week ✨" : value}</dd>
       <dt className="text-[11px] leading-tight font-medium text-plum-soft">{label}</dt>
     </div>
   );

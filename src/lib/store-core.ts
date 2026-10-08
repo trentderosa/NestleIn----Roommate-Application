@@ -52,13 +52,14 @@
  */
 import type { IdSource } from "./chores";
 import type { HouseholdState } from "./types";
-import { validateHouseholdState } from "./validate";
+import { STATE_VERSION, validateHouseholdState } from "./validate";
 
-export const STORAGE_KEY = "nestlein:household";
+export const LEGACY_STORAGE_KEY = "nestlein:household";
+export const STORAGE_KEY = "nestlein:household:v2";
 /** Previous data kept when the user resets / starts fresh. */
-export const BACKUP_KEY = "nestlein:household:backup";
+export const BACKUP_KEY = "nestlein:household:v2:backup";
 /** Unreadable data found on load. Reset never overwrites this. */
-export const RECOVERY_KEY = "nestlein:household:recovery";
+export const RECOVERY_KEY = "nestlein:household:v2:recovery";
 const FORMAT = "nestlein/household";
 const LINEAGE_LIMIT = 200;
 const UNCONFIRMED_WINDOW_MS = 60_000;
@@ -73,7 +74,9 @@ export type Persistence =
   /** Storage can't be read or written at all (blocked, private mode). */
   | "unavailable"
   /** Storage works but writing failed (usually: full), or is paused to protect unbacked data. */
-  | "failed";
+  | "failed"
+  /** A newer app owns the saved data; this tab must never write again. */
+  | "outdated";
 
 export type Recovery = {
   /** Why saved data was rejected. */
@@ -106,10 +109,12 @@ export type Action<R = unknown> = {
   run: (state: HouseholdState, ids: IdSource) => Outcome<R>;
 };
 
-/** Deterministic ids for one action: the same sequence on every replay. */
+export const UPDATED_ELSEWHERE = "NestleIn was updated in another tab, reload to continue.";
+
 export const RESET_ELSEWHERE =
   "Your place was reset in another tab, so that change wasn't applied. You're now seeing the fresh start.";
 
+/** Deterministic ids for one action: the same sequence on every replay. */
 export function idsFor(actionId: string): IdSource {
   let n = 0;
   return (prefix) => `${prefix}_${actionId}_${(n++).toString(36)}`;
@@ -126,6 +131,7 @@ type Saved = {
 type Envelope = Saved & { format: typeof FORMAT; writer: string; savedAt: string };
 
 type ReadResult =
+  | { kind: "future" }
   | { kind: "empty" }
   | { kind: "unavailable" }
   | { kind: "ok"; saved: Saved }
@@ -144,6 +150,10 @@ function parse(raw: string): ReadResult {
   }
   const env = (typeof data === "object" && data !== null ? data : {}) as Partial<Envelope>;
   const isEnvelope = env.format === FORMAT;
+  const payload = (isEnvelope ? env.state : data) as { version?: unknown } | null;
+  if (payload && typeof payload.version === "number" && payload.version > STATE_VERSION) {
+    return { kind: "future" };
+  }
   if (isEnvelope) {
     if (!Number.isInteger(env.revision) || (env.revision as number) < 0) {
       return { kind: "invalid", raw, reason: "revision must be a whole number" };
@@ -202,11 +212,11 @@ export function createHouseholdStore({
 
   // ---------------------------------------------------------------- storage
 
-  function read(): ReadResult {
+  function read(key = STORAGE_KEY): ReadResult {
     if (!storage) return { kind: "unavailable" };
     let raw: string | null;
     try {
-      raw = storage.getItem(STORAGE_KEY);
+      raw = storage.getItem(key);
     } catch {
       return { kind: "unavailable" };
     }
@@ -223,8 +233,9 @@ export function createHouseholdStore({
     }
   }
 
-  function writeEnvelope(saved: Saved): boolean {
+  function writeEnvelope(saved: Saved): boolean | "future" {
     if (!storage) return false;
+    if (persistence === "outdated" || read().kind === "future") return "future";
     const envelope: Envelope = {
       ...saved,
       format: FORMAT,
@@ -301,9 +312,13 @@ export function createHouseholdStore({
 
   /** Re-read storage and adopt anything that isn't our current base. */
   function refresh(): boolean {
+    const found = read();
+    if (found.kind === "future") {
+      persistence = "outdated";
+      return false;
+    }
     // An unsaved reset must not be replaced by the data it was resetting.
     if (resetPending) return false;
-    const found = read();
     if (found.kind === "ok" && found.saved.writeId !== base.writeId) return adopt(found.saved);
     return false;
   }
@@ -315,6 +330,7 @@ export function createHouseholdStore({
    * Older pending actions' conflicts are kept in `conflicts` for the notice.
    */
   function flush(fresh?: Action, depth = 0) {
+    if (persistence === "outdated") return;
     if (!storage) {
       persistence = "unavailable";
       return;
@@ -324,6 +340,10 @@ export function createHouseholdStore({
       return;
     }
     const found = read();
+    if (found.kind === "future") {
+      persistence = "outdated";
+      return;
+    }
     if (found.kind === "unavailable") {
       // Can't read means we can't check other tabs' writes or verify ours.
       persistence = "unavailable";
@@ -361,8 +381,9 @@ export function createHouseholdStore({
       lineage: base.writeId === UNSAVED ? [] : [...base.lineage, base.writeId].slice(-LINEAGE_LIMIT),
       epoch: base.epoch,
     };
-    if (!writeEnvelope(next)) {
-      persistence = "failed";
+    const written = writeEnvelope(next);
+    if (written !== true) {
+      persistence = written === "future" ? "outdated" : "failed";
       return;
     }
     if (pending.length) unconfirmed.push({ writeId: next.writeId, actions: pending, at: now().getTime() });
@@ -377,13 +398,24 @@ export function createHouseholdStore({
 
   function load() {
     loaded = true;
-    const found = read();
+    let found = read();
+    // Consult v1 only during initial migration. Leave it intact for old tabs.
+    const migrating = found.kind === "empty";
+    if (migrating) found = read(LEGACY_STORAGE_KEY);
     if (found.kind === "ok") {
       base = found.saved;
       persistence = "saved";
+      if (migrating) {
+        base = { ...base, writeId: UNSAVED };
+        flush();
+      }
       return;
     }
     base = seedBase();
+    if (found.kind === "future") {
+      persistence = "outdated";
+      return;
+    }
     if (found.kind === "unavailable") {
       persistence = "unavailable";
       return;
@@ -426,6 +458,10 @@ export function createHouseholdStore({
     // Catch up first, so the action is judged against the latest data (and a
     // reset in another tab is adopted before anything is queued on top of it).
     refresh();
+    if (persistence === "outdated") {
+      emit();
+      return { state: snapshot!.state, conflict: UPDATED_ELSEWHERE };
+    }
     if (!resetDetected) {
       pending = [...pending, action as Action];
       flush(action as Action);
@@ -463,7 +499,7 @@ export function createHouseholdStore({
     ensureLoaded();
     pending = [];
     refresh();
-    persistence = !storage ? "unavailable" : protectRaw ? "failed" : "saved";
+    if (persistence !== "outdated") persistence = !storage ? "unavailable" : protectRaw ? "failed" : "saved";
     emit();
   }
 
@@ -494,6 +530,12 @@ export function createHouseholdStore({
    */
   function reset() {
     ensureLoaded();
+    refresh();
+    if (persistence === "outdated" || read().kind === "future") {
+      persistence = "outdated";
+      emit();
+      return;
+    }
     if (protectRaw && recovery && !keep(RECOVERY_KEY, recovery.raw, recovery.reason)) {
       // Still no safe copy of the unreadable data, so storage stays untouched:
       // start over in memory only, keep protecting the old data, and keep

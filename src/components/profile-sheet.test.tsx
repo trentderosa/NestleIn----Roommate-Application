@@ -1,7 +1,10 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useHousehold, useNow } from "@/lib/store";
+import { createSeedState } from "@/lib/mock-data";
+import { actions, useHousehold, useNow } from "@/lib/store";
+import { STORAGE_KEY } from "@/lib/store-core";
+import { statusExpiry } from "@/lib/profile";
 import { ProfileSheetHost, ProfileView, openProfile } from "./profile-sheet";
 
 vi.mock("next/link", () => ({
@@ -78,7 +81,7 @@ describe("ProfileView: your own profile", () => {
     expect(screen.getByTestId("profile-status").textContent).toBe("📚at the library");
 
     // Saved through the store, with a quiet feed entry and an expiry tonight.
-    const saved = JSON.parse(window.localStorage.getItem("nestlein:household")!).state;
+    const saved = JSON.parse(window.localStorage.getItem(STORAGE_KEY)!).state;
     const me = saved.roommates.find((r: { id: string }) => r.id === "krystiana");
     expect(me).toMatchObject({ status: "at the library", statusEmoji: "📚" });
     const end = new Date();
@@ -150,5 +153,48 @@ describe("ProfileSheetHost", () => {
       await new Promise((r) => setTimeout(r, 0)); // Radix restores focus after unmount
     });
     expect(document.activeElement).toBe(opener);
+  });
+});
+
+
+describe("status editor accessibility and expiry", () => {
+  it.each(["Save status", "Cancel", "Clear status"])("focuses the input and returns focus after %s", (button) => {
+    render(<LiveProfile id="krystiana" />);
+    act(() => { actions.setStatus({ text: "hello", emoji: "", clearAfter: "never" }); });
+    fireEvent.click(screen.getByRole("button", { name: "Edit status" }));
+    expect(document.activeElement).toBe(screen.getByLabelText("Your status"));
+    fireEvent.click(screen.getByRole("button", { name: button }));
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Edit status" }));
+  });
+
+  it.each(["today", "week"] as const)("keeps the %s clear-after selection when re-editing and saving", (clearAfter) => {
+    render(<LiveProfile id="krystiana" />);
+    act(() => { actions.setStatus({ text: "hello", emoji: "", clearAfter }); });
+    fireEvent.click(screen.getByRole("button", { name: "Edit status" }));
+    expect((screen.getByLabelText(clearAfter === "today" ? "Today" : "This week") as HTMLInputElement).checked).toBe(true);
+    fireEvent.change(screen.getByLabelText("Your status"), { target: { value: "updated" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save status" }));
+    const saved = JSON.parse(window.localStorage.getItem(STORAGE_KEY)!).state;
+    expect(saved.roommates[0].statusClearAfter).toBe(clearAfter);
+    expect(saved.roommates[0].statusExpiresAt).toBe(statusExpiry(clearAfter, new Date()));
+  });
+
+  it("recovers the selection from earlier v2 timestamp-only statuses", () => {
+    const now = new Date(2026, 9, 8, 12);
+    const state = createSeedState(now);
+    const roommate = { ...state.roommates[0], statusExpiresAt: statusExpiry("week", now), statusUpdatedAt: now.toISOString() };
+    render(<ProfileView state={state} roommate={roommate} now={now} />);
+    fireEvent.click(screen.getByRole("button", { name: "Edit status" }));
+    expect((screen.getByLabelText("This week") as HTMLInputElement).checked).toBe(true);
+  });
+
+  it("uses soft zero states for private stats", () => {
+    const now = new Date();
+    const state = createSeedState(now);
+    state.chores = [];
+    const roommate = { ...state.roommates[0], streak: 0, history: { completed: 0, onTime: 0 } };
+    render(<ProfileView state={state} roommate={roommate} now={now} />);
+    expect(screen.getAllByText("Fresh week ✨")).toHaveLength(3);
+    expect(screen.queryByText("0%")).toBeNull();
   });
 });

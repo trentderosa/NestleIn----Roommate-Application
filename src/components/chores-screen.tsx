@@ -39,7 +39,7 @@ export function ChoresScreen() {
   const pathname = usePathname();
   const params = useSearchParams();
   const [nudging, setNudging] = useState<Chore | null>(null);
-  const [mineOnly, setMineOnly] = useState(() => params.get("mine") === "1");
+  const mineOnly = params.get("mine") === "1";
 
   if (!state) return <ScreenSkeleton />;
 
@@ -53,7 +53,9 @@ export function ChoresScreen() {
   }));
 
   function setFilter(next: ChoreFilter) {
-    router.replace(`${pathname}?filter=${next}`, { scroll: false });
+    const nextParams = new URLSearchParams(params.toString());
+    nextParams.set("filter", next);
+    router.replace(`${pathname}?${nextParams}`, { scroll: false });
   }
 
   const recurring = chores.filter((c) => c.recurrence !== "once" && c.status === "open").length;
@@ -80,11 +82,16 @@ export function ChoresScreen() {
 
       <FilterChips label="Filter chores" options={options} value={filter} onChange={setFilter} />
 
-      <label className="mb-5 flex w-fit cursor-pointer items-center gap-3 text-sm font-semibold text-plum">
+      <label className="mb-5 flex min-h-11 w-fit cursor-pointer items-center gap-3 text-sm font-semibold text-plum">
         <input
           type="checkbox"
           checked={mineOnly}
-          onChange={(e) => setMineOnly(e.target.checked)}
+          onChange={(e) => {
+            const nextParams = new URLSearchParams(params.toString());
+            if (e.target.checked) nextParams.set("mine", "1");
+            else nextParams.delete("mine");
+            router.replace(`${pathname}?${nextParams}`, { scroll: false });
+          }}
           className="peer sr-only"
         />
         <span
