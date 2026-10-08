@@ -8,6 +8,7 @@ import { actions } from "@/lib/store";
 import { relativeTime } from "@/lib/time";
 import type { ActivityEvent, HouseholdState, ID } from "@/lib/types";
 import { Avatar } from "./avatar";
+import { ProfileButton } from "./profile-sheet";
 
 const REACTIONS = ["💕", "✨", "🙌", "😂"];
 
@@ -16,6 +17,7 @@ const BADGE: Record<ActivityEvent["type"], { emoji: string; label: string }> = {
   nudged: { emoji: "👀", label: "Nudge" },
   rotated: { emoji: "🔄", label: "Rotation" },
   created: { emoji: "📝", label: "New chore" },
+  status: { emoji: "💬", label: "Status" },
 };
 
 export function ActivityItem({
@@ -82,6 +84,15 @@ export function ActivityItem({
         </>
       );
       break;
+    case "status":
+      // Quiet: a status is a small update, not news.
+      text = (
+        <>
+          {name(event.actorId)} set a status: {event.emoji && <span>{event.emoji} </span>}
+          {event.text && <span className="text-plum">“{event.text}”</span>}
+        </>
+      );
+      break;
   }
 
   const reactions = Object.entries(event.reactions);
@@ -93,7 +104,11 @@ export function ActivityItem({
   return (
     <li className="flex gap-3">
       <span className="relative h-fit">
-        {subject && <Avatar roommate={subject} size="md" />}
+        {subject && (
+          <ProfileButton roommate={subject} isMe={subject.id === me}>
+            <Avatar roommate={subject} size="md" />
+          </ProfileButton>
+        )}
         <span
           className="absolute -right-1 -bottom-1 grid size-5 place-items-center rounded-full bg-white text-[11px] shadow-soft"
           aria-label={BADGE[event.type].label}

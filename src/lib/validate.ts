@@ -8,11 +8,22 @@
  *
  * Written by hand (no schema library) to keep dependencies minimal. When a
  * real backend arrives, the same checks map onto database constraints.
+ *
+ * ## Versions
+ * Saved data carries `version`. Older versions are upgraded by
+ * `migrateHouseholdState` before validation, so old saves keep loading; the
+ * next save writes the current version.
+ * - v1 → v2: a roommate's status was one string with the emoji inside
+ *   ("exam week, be nice 📚"); v2 splits it into `status` + `statusEmoji` and
+ *   adds optional `statusExpiresAt` / `statusUpdatedAt`.
  */
 import { ACCENTS, CATEGORIES, RECURRENCE_LABELS } from "./design";
 import type { HouseholdState } from "./types";
 
-export const STATE_VERSION = 1;
+export const STATE_VERSION = 2;
+
+/** Longest status a roommate can set, in characters (emoji count as one). */
+export const STATUS_MAX_LENGTH = 60;
 
 export type ValidationResult =
   | { ok: true; state: HouseholdState }
@@ -97,11 +108,48 @@ function unique(id: string, seen: Set<string>, path: string) {
  */
 export function validateHouseholdState(value: unknown): ValidationResult {
   try {
-    return { ok: true, state: check(value) };
+    return { ok: true, state: check(migrateHouseholdState(value)) };
   } catch (e) {
     if (e instanceof Invalid) return { ok: false, reason: e.message };
     throw e;
   }
+}
+
+// A trailing emoji (with variation selectors, skin tones, or ZWJ sequences).
+const TRAILING_EMOJI =
+  /\s*(\p{Extended_Pictographic}(?:\uFE0F|\p{Emoji_Modifier}|\u200D\p{Extended_Pictographic})*)\s*$/u;
+
+/** Split "exam week, be nice 📚" into its text and trailing emoji. */
+export function splitStatus(status: string): { text: string; emoji: string } {
+  const match = status.match(TRAILING_EMOJI);
+  if (!match) return { text: status.trim(), emoji: "" };
+  return { text: status.slice(0, match.index).trim(), emoji: match[1] };
+}
+
+/**
+ * Upgrade older saved data to the current version. Unknown or malformed input
+ * is returned unchanged for validation to reject.
+ */
+export function migrateHouseholdState(value: unknown): unknown {
+  if (!isRecord(value) || value.version !== 1) return value;
+  const roommates = Array.isArray(value.roommates)
+    ? value.roommates.map((r) => {
+        if (!isRecord(r) || typeof r.status !== "string" || "statusEmoji" in r) return r;
+        const { text, emoji } = splitStatus(r.status);
+        return { ...r, status: Array.from(text).slice(0, STATUS_MAX_LENGTH).join(""), statusEmoji: emoji };
+      })
+    : value.roommates;
+  return { ...value, version: 2, roommates };
+}
+
+function statusText(v: unknown, path: string) {
+  const text = str(v, path);
+  if (Array.from(text).length > STATUS_MAX_LENGTH) fail(path, `must be at most ${STATUS_MAX_LENGTH} characters`);
+}
+
+function emojiText(v: unknown, path: string) {
+  const text = str(v, path);
+  if (Array.from(text).length > 8) fail(path, "must be a single emoji");
 }
 
 function check(value: unknown): HouseholdState {
@@ -131,7 +179,11 @@ function check(value: unknown): HouseholdState {
     str(r.name, `${p}.name`, { nonEmpty: true });
     oneOf(r.accent, ACCENT_KEYS, `${p}.accent`);
     str(r.emoji, `${p}.emoji`);
-    str(r.status, `${p}.status`);
+    statusText(r.status, `${p}.status`);
+    emojiText(r.statusEmoji, `${p}.statusEmoji`);
+    if (r.statusExpiresAt !== undefined) date(r.statusExpiresAt, `${p}.statusExpiresAt`);
+    if (r.statusClearAfter !== undefined) oneOf(r.statusClearAfter, new Set(["today", "week", "never"]), `${p}.statusClearAfter`);
+    if (r.statusUpdatedAt !== undefined) date(r.statusUpdatedAt, `${p}.statusUpdatedAt`);
     int(r.streak, `${p}.streak`, 0);
     const h = record(r.history, `${p}.history`);
     const completed = int(h.completed, `${p}.history.completed`, 0);
@@ -203,6 +255,11 @@ function check(value: unknown): HouseholdState {
       case "rotated":
         str(e.choreTitle, `${p}.choreTitle`);
         member(e.toId, members, `${p}.toId`);
+        break;
+      case "status":
+        member(e.actorId, members, `${p}.actorId`);
+        statusText(e.text, `${p}.text`);
+        emojiText(e.emoji, `${p}.emoji`);
         break;
       default:
         fail(`${p}.type`, `has unknown value ${JSON.stringify(e.type)}`);

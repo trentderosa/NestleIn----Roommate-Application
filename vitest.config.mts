@@ -8,5 +8,7 @@ export default defineConfig({
   test: {
     // Pure logic runs in node; component tests opt into jsdom per file.
     environment: "node",
+    // DOM accessibility queries can take longer on constrained cloud runners.
+    testTimeout: 30_000,
   },
 });

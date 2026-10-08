@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { AlertTriangle, LifeBuoy } from "lucide-react";
+import { UPDATED_ELSEWHERE } from "@/lib/store-core";
 import { actions, useHouseholdSnapshot } from "@/lib/store";
 
 /**
@@ -15,6 +16,7 @@ export function StorageNotice() {
   const [copied, setCopied] = useState(false);
   if (!snapshot) return null;
   const { persistence, recovery, conflicts, pending } = snapshot;
+  if (persistence === "outdated") return <Notice tone="warn"><p className="font-semibold">{UPDATED_ELSEWHERE}</p></Notice>;
   // While unbacked old data is protected, the recovery notice explains it.
   const showSaveProblem = persistence !== "saved" && !(recovery && !recovery.backedUp);
 

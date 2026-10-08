@@ -18,6 +18,7 @@
 import { useSyncExternalStore } from "react";
 import * as logic from "./chores";
 import { createSeedState } from "./mock-data";
+import { setStatus, type StatusInput } from "./profile";
 import {
   createHouseholdStore,
   type HouseholdStore,
@@ -184,6 +185,13 @@ export const actions = {
     const me = shown.currentUserId;
     const on = !shown.activity.find((e) => e.id === eventId)?.reactions[emoji]?.includes(me);
     return act((s) => ({ state: logic.setReaction(s, eventId, emoji, me, on) })).conflict;
+  },
+  /**
+   * Set or clear (empty text and emoji) the acting roommate's status.
+   * Returns a user-facing explanation if it couldn't be applied.
+   */
+  setStatus(input: StatusInput): string | undefined {
+    return act((s, ids, at, actor) => ({ state: setStatus(s, actor, input, at, ids) })).conflict;
   },
   /** Returns a user-facing explanation if it couldn't be applied. */
   switchUser(id: ID): string | undefined {

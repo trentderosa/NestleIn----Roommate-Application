@@ -15,7 +15,7 @@ The demo household is **The Pink Palace**: Krystiana (you), Ellie, Katie, and Em
 - **Nudge 👀**: a bottom sheet with **Sweet / Funny / Direct** tones, suggested messages you can shuffle or edit, a sent confirmation, a feed entry, and a 30-minute per-chore cooldown to prevent spam
 - **Chores** (`/chores`): filters (today, upcoming, running late, done, all) kept in the URL, plus a "Just mine" toggle
 - **Create / Edit chore** (`/chores/new`, `/chores/[id]/edit`): quick templates, category, notes, assignee (defaults to whoever has the lightest load), rotate-between-roommates with an order preview, due date/time with quick picks, recurrence (once, daily, weekly, every 2 weeks, monthly), and size/points
-- **Roommates** (`/roommates`): profile cards with status, streak, open chores, done this week, points, on-time rate, and up next. Also an invite code, plus **prototype controls** to view the app as another roommate or reset the demo.
+- **Roommates** (`/roommates`): profile cards with status, streak, and up next. Weekly stats and the on-time rate appear only on your own card. Your avatar opens a profile sheet with editable status, private stats and badges; other roomies’ profiles are read-only. Also an invite code, plus **prototype controls** to view the app as another roommate or reset the demo.
 - **House feed** (`/activity`): activity grouped by day, with filters and emoji reactions
 - Responsive layout: a bottom tab bar with a raised Add button on mobile, and a sidebar with a two-column board on desktop
 
@@ -37,7 +37,7 @@ npm run dev
 
 Open http://localhost:3000. Mobile is the primary target, so try it in your browser's device toolbar.
 
-To start the demo over, use **Roommates → Reset demo data** or clear `localStorage`. Resetting keeps the previous data under `nestlein:household:backup`; unreadable data found on load is kept separately under `nestlein:household:recovery`, which a reset never overwrites.
+To start the demo over, use **Roommates → Reset demo data** or clear `localStorage`. Current data uses `nestlein:household:v2`. The first load migrates `nestlein:household` once, leaving that old key untouched; later writes from old tabs are ignored. If a newer schema is found, this tab stops writing and asks you to reload. Resetting keeps the previous data under `nestlein:household:v2:backup`; unreadable data found on load is kept separately under `nestlein:household:v2:recovery`, which a reset never overwrites.
 
 ## Scripts
 

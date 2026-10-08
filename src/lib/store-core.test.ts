@@ -13,6 +13,8 @@ import {
 import { createSeedState } from "./mock-data";
 import {
   BACKUP_KEY,
+  LEGACY_STORAGE_KEY,
+  UPDATED_ELSEWHERE,
   RECOVERY_KEY,
   RESET_ELSEWHERE,
   STORAGE_KEY,
@@ -109,6 +111,28 @@ describe("loading", () => {
     const snap = tab(storage, "A").getSnapshot();
     expect(snap).toMatchObject({ persistence: "saved", recovery: null, revision: 1, pending: 0 });
     expect(storage.envelope()).toMatchObject({ revision: 1, writer: "A" });
+  });
+
+  it("loads a schema-v1 envelope and saves it back as v2", () => {
+    const storage = new FakeStorage();
+    const s = seed() as unknown as Record<string, unknown> & { roommates: Record<string, unknown>[] };
+    const v1 = {
+      ...s,
+      version: 1,
+      roommates: s.roommates.map(({ statusEmoji, ...r }) => ({ ...r, status: `${r.status} ${statusEmoji}` })),
+    };
+    storage.data.set(
+      STORAGE_KEY,
+      JSON.stringify({ format: "nestlein/household", revision: 7, writeId: "w_old", lineage: [], epoch: "e", writer: "X", savedAt: "", state: v1 }),
+    );
+    const A = tab(storage, "A");
+    const snap = A.getSnapshot();
+    expect(snap.recovery).toBeNull();
+    expect(snap.state.roommates[0]).toMatchObject({ status: "matcha-powered today", statusEmoji: "🍵" });
+    A.dispatch(complete("chore_counters"));
+    expect(storage.envelope()).toMatchObject({ revision: 8 });
+    expect(storage.saved().version).toBe(2);
+    expect(storage.saved().roommates[0]).toMatchObject({ status: seed().roommates[0].status, statusEmoji: seed().roommates[0].statusEmoji });
   });
 
   it("accepts data saved by the first prototype (a bare state)", () => {
@@ -576,4 +600,96 @@ describe("multiple tabs", () => {
     expect(status(storage.saved(), "chore_counters")).toBe("open");
     expect(storage.envelope().revision).toBe(3);
   });
+});
+
+
+describe("v2 storage isolation", () => {
+  it("migrates v1 once, leaves it untouched, and ignores old-tab writes", () => {
+    const storage = new FakeStorage();
+    const old = { ...seed(), version: 1, roommates: seed().roommates.map((r) => ({
+      id: r.id, name: r.name, accent: r.accent, emoji: r.emoji,
+      status: `${r.status} ${r.statusEmoji}`.trim(), streak: r.streak, history: r.history,
+    })) };
+    const raw = JSON.stringify(old);
+    storage.setItem(LEGACY_STORAGE_KEY, raw);
+    const a = tab(storage, "a");
+    expect(a.getSnapshot().state.version).toBe(2);
+    expect(storage.saved().version).toBe(2);
+    expect(storage.saved().roommates[0]).toMatchObject({ status: seed().roommates[0].status, statusEmoji: seed().roommates[0].statusEmoji });
+    expect(storage.getItem(LEGACY_STORAGE_KEY)).toBe(raw);
+    a.dispatch(complete("chore_trash"));
+    const migrated = storage.getItem(STORAGE_KEY);
+    storage.setItem(LEGACY_STORAGE_KEY, JSON.stringify({ ...old, currentUserId: "ellie" }));
+    a.handleStorageEvent(LEGACY_STORAGE_KEY);
+    expect(a.getSnapshot().state.currentUserId).toBe("krystiana");
+    expect(status(a.getSnapshot().state, "chore_trash")).toBe("done");
+    expect(storage.getItem(STORAGE_KEY)).toBe(migrated);
+    expect(tab(storage, "b").getSnapshot().state).toEqual(a.getSnapshot().state);
+  });
+
+  it.each(["bare", "envelope", "legacy"])("never overwrites a future version on load (%s)", (shape) => {
+    const storage = new FakeStorage();
+    const state = { ...seed(), version: 3 };
+    const raw = JSON.stringify(shape === "envelope" ? { format: "nestlein/household", state } : state);
+    const key = shape === "legacy" ? LEGACY_STORAGE_KEY : STORAGE_KEY;
+    storage.setItem(key, raw);
+    const a = tab(storage, "a");
+    expect(a.getSnapshot().persistence).toBe("outdated");
+    expect(a.getSnapshot().recovery).toBeNull();
+    expect(a.dispatch(complete("chore_trash")).conflict).toBe(UPDATED_ELSEWHERE);
+    a.retrySave();
+    a.reset();
+    a.dismissRecovery();
+    a.discardPending();
+    expect(a.getSnapshot().persistence).toBe("outdated");
+    expect(storage.getItem(key)).toBe(raw);
+    expect(storage.getItem(RECOVERY_KEY)).toBeNull();
+    if (shape === "legacy") expect(storage.getItem(STORAGE_KEY)).toBeNull();
+  });
+
+  it.each([true, false])("protects future writes in an already loaded tab (event: %s)", (event) => {
+    const storage = new FakeStorage();
+    const a = tab(storage, "a");
+    a.getSnapshot();
+    storage.failWrites = true;
+    a.dispatch(complete("chore_trash"));
+    storage.failWrites = false;
+    const raw = otherWrite(storage, 99, { ...seed(), version: 3 });
+    storage.setItem(STORAGE_KEY, raw);
+    if (event) deliver(a);
+    a.retrySave();
+    expect(a.getSnapshot().persistence).toBe("outdated");
+    expect(a.dispatch(react("✨")).conflict).toBe(UPDATED_ELSEWHERE);
+    a.reset();
+    expect(storage.getItem(STORAGE_KEY)).toBe(raw);
+  });
+});
+
+
+it("rejects a fresh action when a future write arrives without a storage event", () => {
+  const storage = new FakeStorage();
+  const a = tab(storage, "a");
+  const before = a.getSnapshot().state;
+  const raw = otherWrite(storage, 42, { ...seed(), version: 3 });
+  storage.setItem(STORAGE_KEY, raw);
+  expect(a.dispatch(complete("chore_trash")).conflict).toBe(UPDATED_ELSEWHERE);
+  expect(a.getSnapshot().state).toEqual(before);
+  expect(a.getSnapshot().pending).toBe(0);
+  expect(storage.getItem(STORAGE_KEY)).toBe(raw);
+});
+
+
+it("blocks a pending reset when another tab saves a future version", () => {
+  const storage = new FakeStorage();
+  const a = tab(storage, "a");
+  a.getSnapshot();
+  storage.failWrites = true;
+  a.reset();
+  storage.failWrites = false;
+  const raw = otherWrite(storage, 42, { ...seed(), version: 3 });
+  storage.setItem(STORAGE_KEY, raw);
+  deliver(a);
+  expect(a.getSnapshot().persistence).toBe("outdated");
+  a.retrySave();
+  expect(storage.getItem(STORAGE_KEY)).toBe(raw);
 });
