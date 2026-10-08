@@ -30,25 +30,25 @@ Household data is `null` during server render and hydration, so screens must ren
 npm run validate   # lint + typecheck + unit tests + production build
 ```
 
-If a branch doesn't have `validate` yet, run whichever of `npm run lint`, `npm run typecheck`, `npm test`, and `npm run build` exist. Also check changed screens in a browser at mobile width and look for console errors.
+Also check changed screens in a browser at mobile width (~375px) and desktop, and look for console errors.
 
 ## Git workflow (required)
 
 The canonical local repo is **`C:\Users\Trent\OneDrive\NestleIn - App`**. Before any work, confirm you're inside it (`git rev-parse --show-toplevel`).
 
-Treat `main` as a **protected production branch**, even though GitHub technically allows direct commits and merges. Before every git operation, ask yourself: *could this directly change `main`?* If yes, or if you're unsure, don't do it. Use a feature branch and a PR instead.
+Treat `main` as a **protected production branch**, even though GitHub technically allows direct commits and merges. Before every git operation, ask yourself: *could this directly change `main`?* If yes, or if you're unsure, don't do it. Use a branch and a PR instead.
 
-### For every code change
+### For every change
 
 1. Check the current branch. If you're on `main`, create a branch **before** editing any files.
 2. Start from the latest `main`: `git fetch origin`, `git switch main`, `git pull --ff-only origin main`.
 3. Create a branch named for the work:
-   - `feat/<thing>` (e.g. `feat/nudge-interaction`)
+   - `feat/<thing>` for features (e.g. `feat/nudge-interaction`)
    - `fix/<thing>` (e.g. `fix/mobile-navigation`)
    - `refactor/<thing>`
    - `style/<thing>`
    - `docs/<thing>`
-   - `chore/<thing>` (for config)
+   - `chore/<thing>` (for config and tooling)
 
    Never use vague names like `changes`, `update`, `work`, `test`, or `new-branch`.
 4. Make the requested changes only on that branch.
@@ -61,22 +61,27 @@ Treat `main` as a **protected production branch**, even though GitHub technicall
 
 This applies to every kind of change: feature, fix, refactor, styling, docs, and config.
 
-### Never
+### Review
 
-- merge a PR, by any method (merge, squash, rebase), or enable auto-merge
-- push to `main`, commit on `main`, or otherwise bypass the PR workflow
-- delete a branch before its PR is reviewed and merged
-- force-push or rewrite shared history without inspecting it and asking first
+Every PR goes through a separate **Codex code review** before it can be merged.
 
-These hold even when all checks pass, the change is tiny, the PR has no conflicts, or GitHub says it's ready to merge. **Only the user decides when a PR merges.** Never say work was merged unless the user merged it.
-
-### Review fixes
-
-If the user sends review feedback (e.g. from Codex) on an existing PR:
+If the user sends review feedback on an existing PR:
 
 1. Stay on that PR's existing branch. Don't open a new PR unless the user explicitly asks.
 2. Make the fixes, re-run validation, then commit and push to the same branch. The PR updates automatically.
 3. Report the updated validation results and the same PR URL.
 4. **STOP.**
 
-Flow: branch from latest `main` → implement → validate → commit → push → PR → **STOP** → review → fixes on the same branch → **STOP** → the user merges.
+### Merging: only the user merges
+
+Claude never merges. The user merges every PR themselves, after the Codex review.
+
+Never:
+- merge a PR, by any method (merge, squash, rebase), or enable auto-merge
+- push to `main`, commit on `main`, or otherwise bypass the PR workflow
+- delete a branch before its PR is reviewed and merged
+- force-push or rewrite shared history
+
+None of these rules relax because checks pass, the change is tiny, the PR has no conflicts, GitHub says it's ready to merge, or the user approves the PR. Approval means the user will merge it. Never say work was merged unless the user merged it.
+
+Flow: branch from latest `main` → implement → validate → commit → push → PR → **STOP** → Codex review → fixes on the same branch → **STOP** → the user merges.
