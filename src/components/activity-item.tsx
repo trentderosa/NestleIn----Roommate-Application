@@ -16,6 +16,7 @@ const BADGE: Record<ActivityEvent["type"], { emoji: string; label: string }> = {
   nudged: { emoji: "👀", label: "Nudge" },
   rotated: { emoji: "🔄", label: "Rotation" },
   created: { emoji: "📝", label: "New chore" },
+  status: { emoji: "💬", label: "Status" },
 };
 
 export function ActivityItem({
@@ -79,6 +80,15 @@ export function ActivityItem({
         <>
           {name(event.actorId)} added {chore(event.choreTitle)} for{" "}
           {name(event.assigneeId, false)}
+        </>
+      );
+      break;
+    case "status":
+      // Quiet: a status is a small update, not news.
+      text = (
+        <>
+          {name(event.actorId)} set a status: {event.emoji && <span>{event.emoji} </span>}
+          {event.text && <span className="text-plum">“{event.text}”</span>}
         </>
       );
       break;

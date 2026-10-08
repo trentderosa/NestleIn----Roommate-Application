@@ -111,6 +111,27 @@ describe("loading", () => {
     expect(storage.envelope()).toMatchObject({ revision: 1, writer: "A" });
   });
 
+  it("loads a schema-v1 envelope and saves it back as v2", () => {
+    const storage = new FakeStorage();
+    const s = seed() as unknown as Record<string, unknown> & { roommates: Record<string, unknown>[] };
+    const v1 = {
+      ...s,
+      version: 1,
+      roommates: s.roommates.map(({ statusEmoji, ...r }) => ({ ...r, status: `${r.status} ${statusEmoji}` })),
+    };
+    storage.data.set(
+      STORAGE_KEY,
+      JSON.stringify({ format: "nestlein/household", revision: 7, writeId: "w_old", lineage: [], epoch: "e", writer: "X", savedAt: "", state: v1 }),
+    );
+    const A = tab(storage, "A");
+    const snap = A.getSnapshot();
+    expect(snap.recovery).toBeNull();
+    expect(snap.state.roommates[0]).toMatchObject({ status: "matcha-powered today", statusEmoji: "🍵" });
+    A.dispatch(complete("chore_counters"));
+    expect(storage.envelope()).toMatchObject({ revision: 8 });
+    expect(storage.saved().version).toBe(2);
+  });
+
   it("accepts data saved by the first prototype (a bare state)", () => {
     const storage = new FakeStorage();
     storage.data.set(STORAGE_KEY, JSON.stringify(completeChore(seed(), "chore_counters", NOW)));

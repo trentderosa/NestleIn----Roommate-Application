@@ -18,8 +18,14 @@ export type Roommate = {
   accent: AccentColor;
   /** Small emoji shown on the avatar badge. */
   emoji: string;
-  /** Short, user-written status, e.g. "exam week, be nice 📚". */
+  /** Short, user-written status text (max 60 characters), e.g. "exam week, be nice". */
   status: string;
+  /** Emoji shown with the status ("" for none). */
+  statusEmoji: string;
+  /** When the status stops showing (ISO). Unset = until it's changed. */
+  statusExpiresAt?: string;
+  /** When the roommate last set their status (ISO). */
+  statusUpdatedAt?: string;
   /** Chores finished on time in a row. Grows on time, never punishes (late just doesn't count). */
   streak: number;
   /** Lifetime totals from before the data in this prototype; combined with live data in stats. */
@@ -100,11 +106,16 @@ export type ActivityEventData =
       message: string;
     }
   | { type: "rotated"; choreTitle: string; toId: ID }
+  /** A quiet entry when someone sets a status. */
+  | { type: "status"; actorId: ID; text: string; emoji: string }
   | { type: "created"; actorId: ID; choreId: ID; choreTitle: string; assigneeId: ID };
 
 export type ActivityEvent = EventBase & ActivityEventData;
 
 export type ActivityType = ActivityEvent["type"];
+
+/** How long a status lasts. */
+export type StatusClearAfter = "today" | "week" | "never";
 
 export type HouseholdState = {
   version: number;

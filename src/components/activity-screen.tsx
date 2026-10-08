@@ -19,7 +19,7 @@ const FILTERS: { value: FeedFilter; label: string }[] = [
 function matches(e: ActivityEvent, f: FeedFilter) {
   if (f === "done") return e.type === "completed";
   if (f === "nudges") return e.type === "nudged";
-  if (f === "updates") return e.type === "rotated" || e.type === "created";
+  if (f === "updates") return e.type === "rotated" || e.type === "created" || e.type === "status";
   return true;
 }
 
