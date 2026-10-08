@@ -4,6 +4,7 @@ import {
   completeChoreWithUndo,
   deleteChore,
   saveChore,
+  sendNudge,
   setReaction,
   undo,
   type IdSource,
@@ -13,6 +14,7 @@ import { createSeedState } from "./mock-data";
 import {
   BACKUP_KEY,
   RECOVERY_KEY,
+  RESET_ELSEWHERE,
   STORAGE_KEY,
   createHouseholdStore,
   type Action,
@@ -160,6 +162,34 @@ describe("loading", () => {
     expect(status(storage.saved(), "chore_counters")).toBe("done");
   });
 
+  // Fix 1 (second review)
+  it("a reset doesn't overwrite unreadable data that still has no safe copy", () => {
+    const storage = new FakeStorage();
+    storage.data.set(STORAGE_KEY, "{not json");
+    storage.failKeys.add(RECOVERY_KEY);
+    storage.failKeys.add(BACKUP_KEY);
+    const A = tab(storage, "A");
+    A.getSnapshot();
+    A.dispatch(complete("chore_counters"));
+
+    A.reset();
+    expect(storage.data.get(STORAGE_KEY)).toBe("{not json"); // untouched
+    const snap = A.getSnapshot();
+    expect(snap.recovery?.raw).toBe("{not json"); // still copyable
+    expect(snap).toMatchObject({ persistence: "failed", pending: 0 });
+    expect(status(snap.state, "chore_counters")).toBe("open"); // fresh start, in memory
+
+    // Further actions still don't touch it.
+    A.dispatch(complete("chore_plants"));
+    expect(storage.data.get(STORAGE_KEY)).toBe("{not json");
+
+    // Once a safe copy can be made, a reset proceeds normally.
+    storage.failKeys.clear();
+    A.reset();
+    expect(JSON.parse(storage.data.get(RECOVERY_KEY)!).raw).toBe("{not json");
+    expect(storage.envelope().state.household.name).toBe("The Pink Palace");
+  });
+
   // Fix 2
   it("keeps the recovery copy when the user later resets", () => {
     const storage = new FakeStorage();
@@ -275,7 +305,8 @@ describe("storage failures", () => {
   });
 
   // Fix 4
-  it("retrySave reports a conflict and keeps changes that no longer fit", () => {
+  // Fix 4 (second review)
+  it("retrySave drops only the changes that no longer fit, explains them, and saves the rest", () => {
     const storage = new FakeStorage();
     const A = tab(storage, "A");
     const B = tab(storage, "B");
@@ -289,20 +320,40 @@ describe("storage failures", () => {
         : { state: s, conflict: "Your edit to “Fridge glow-up” couldn't be saved because it was deleted in another tab." },
     );
     storage.failKeys.add(STORAGE_KEY);
-    A.dispatch(editFridge);
+    A.dispatch(complete("chore_counters")); // fits
+    A.dispatch(editFridge); // won't fit
+    A.dispatch(react("💕")); // fits
+    expect(A.getSnapshot().pending).toBe(3);
     storage.failKeys.clear();
     B.dispatch(action((s) => deleteChore(s, "chore_fridge"))); // revision 2
 
-    expect(A.retrySave()).toBe("conflict");
+    expect(A.retrySave()).toBe("saved");
     const snap = A.getSnapshot();
-    expect(snap.persistence).toBe("conflict");
-    expect(snap.conflicts[0]).toMatch(/deleted in another tab/);
-    expect(snap.pending).toBe(1); // kept, not silently dropped
-    expect(storage.envelope().revision).toBe(2); // nothing written
+    expect(snap).toMatchObject({ persistence: "saved", pending: 0 });
+    expect(snap.conflicts).toEqual([
+      "Your edit to “Fridge glow-up” couldn't be saved because it was deleted in another tab.",
+    ]);
+    const saved = storage.saved();
+    expect(storage.envelope().revision).toBe(3);
+    expect(status(saved, "chore_counters")).toBe("done");
+    expect(reactions(saved)["💕"]).toEqual(["krystiana"]);
+    expect(status(saved, "chore_fridge")).toBeUndefined(); // B's delete stands
 
+    A.dismissConflicts();
+    expect(A.getSnapshot().conflicts).toEqual([]);
+  });
+
+  it("discards unsaved changes on request", () => {
+    const storage = new FakeStorage();
+    const A = tab(storage, "A");
+    A.getSnapshot();
+    storage.failKeys.add(STORAGE_KEY);
+    A.dispatch(complete("chore_counters"));
+    A.dispatch(react("💕"));
+    expect(A.getSnapshot().pending).toBe(2);
     A.discardPending();
-    expect(A.getSnapshot()).toMatchObject({ persistence: "saved", pending: 0, conflicts: [] });
-    expect(status(A.getSnapshot().state, "chore_fridge")).toBeUndefined();
+    expect(A.getSnapshot().pending).toBe(0);
+    expect(status(A.getSnapshot().state, "chore_counters")).toBe("open");
   });
 });
 
@@ -438,6 +489,78 @@ describe("multiple tabs", () => {
     deliver(A);
     expect(A.getSnapshot()).toMatchObject({ pending: 0 });
     expect(status(A.getSnapshot().state, "chore_counters")).toBe("open");
+  });
+
+  // Fix 2 (second review)
+  it("an action taken before another tab's reset arrives is rejected with an explanation", () => {
+    const storage = new FakeStorage();
+    const A = tab(storage, "A");
+    const B = tab(storage, "B");
+    A.dispatch(complete("chore_plants")); // A's view: plants done
+    B.reset(); // storage now holds B's fresh start; A hasn't heard yet
+
+    const out = A.dispatch(complete("chore_counters"));
+    expect(out).toBeDefined();
+    expect(out.conflict).toBe(RESET_ELSEWHERE);
+    expect(out.state).toBeDefined();
+
+    // A adopted the reset instead of writing on top of it.
+    const shown = A.getSnapshot().state;
+    expect(status(shown, "chore_plants")).toBe("open");
+    expect(status(shown, "chore_counters")).toBe("open");
+    expect(A.getSnapshot().pending).toBe(0);
+    expect(status(storage.saved(), "chore_counters")).toBe("open");
+    // A's next action applies to the reset household normally.
+    expect(A.dispatch(complete("chore_counters")).conflict).toBeUndefined();
+    expect(status(storage.saved(), "chore_counters")).toBe("done");
+  });
+
+  // Fix 3 (second review)
+  it("replays keep credit with the roommate who acted, even if View as changed", () => {
+    const storage = new FakeStorage();
+    const A = tab(storage, "A");
+    A.getSnapshot();
+
+    // Actions capture their actor (Krystiana) when created, like store.ts does.
+    const actor = A.getSnapshot().state.currentUserId;
+    expect(actor).toBe("krystiana");
+    A.dispatch(action((s, ids) => completeChore(s, "chore_trash", NOW, ids, actor)));
+    A.dispatch(
+      action((s, ids) =>
+        sendNudge(s, { choreId: "chore_dishwasher", tone: "sweet", message: "hi" }, NOW, ids, actor),
+      ),
+    );
+    const input = {
+      title: "Descale kettle",
+      category: "kitchen" as const,
+      assigneeId: "ellie",
+      dueAt: NOW.toISOString(),
+      recurrence: "once" as const,
+      rotate: false,
+      points: 1 as const,
+    };
+    A.dispatch(action((s, ids) => saveChore(s, input, NOW, undefined, ids, actor)));
+
+    // Before A's writes are confirmed, a tab that never saw them switches
+    // "View as" to Ellie and overwrites the latest revision.
+    const stale = { ...seed(), currentUserId: "ellie" };
+    storage.data.set(STORAGE_KEY, otherWrite(storage, storage.envelope().revision, stale));
+    deliver(A); // A replays its lost actions on Ellie's view
+
+    const saved = storage.saved();
+    expect(saved.currentUserId).toBe("ellie");
+    expect(saved.chores.find((c) => c.id === "chore_trash")).toMatchObject({ status: "done", completedBy: "krystiana" });
+    expect(saved.activity.find((e) => e.type === "completed" && e.choreId === "chore_trash")).toMatchObject({
+      actorId: "krystiana",
+    });
+    expect(saved.activity.find((e) => e.type === "nudged" && e.choreId === "chore_dishwasher")).toMatchObject({
+      actorId: "krystiana",
+    });
+    const kettle = saved.chores.find((c) => c.title === "Descale kettle")!;
+    expect(kettle.createdBy).toBe("krystiana");
+    expect(saved.activity.find((e) => e.type === "created" && e.choreId === kettle.id)).toMatchObject({
+      actorId: "krystiana",
+    });
   });
 
   it("a reset that couldn't be saved still wins once saving works", () => {

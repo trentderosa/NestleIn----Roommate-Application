@@ -6,8 +6,9 @@ import { actions, useHouseholdSnapshot } from "@/lib/store";
 
 /**
  * Honest status about saving: shown when changes aren't reaching storage,
- * when unsaved changes conflict with another tab, or when saved data couldn't
- * be read and the app started fresh.
+ * when some unsaved changes had to be dropped because they no longer fit
+ * another tab's data, or when saved data couldn't be read and the app
+ * started fresh.
  */
 export function StorageNotice() {
   const snapshot = useHouseholdSnapshot();
@@ -29,36 +30,41 @@ export function StorageNotice() {
 
   return (
     <>
-      {showSaveProblem && persistence === "conflict" && (
+      {conflicts.length > 0 && (
         <Notice tone="warn">
           <p className="font-semibold">
-            Some unsaved changes no longer fit what was saved in another tab
+            {conflicts.length === 1
+              ? "One change couldn't be saved because it no longer fits what another tab saved."
+              : `${conflicts.length} changes couldn't be saved because they no longer fit what another tab saved.`}{" "}
+            Everything else was kept.
           </p>
           <ul className="mt-1 list-disc pl-5 text-plum-soft">
-            {conflicts.map((c) => (
-              <li key={c}>{c}</li>
+            {conflicts.map((c, i) => (
+              <li key={`${i}-${c}`}>{c}</li>
             ))}
           </ul>
-          <div className="mt-2 flex flex-wrap gap-2">
-            <NoticeButton onClick={() => actions.retrySave()}>Try again</NoticeButton>
-            <NoticeButton quiet onClick={() => actions.discardPending()}>
-              Discard unsaved changes
+          <div className="mt-2">
+            <NoticeButton quiet onClick={() => actions.dismissConflicts()}>
+              Got it
             </NoticeButton>
           </div>
         </Notice>
       )}
 
-      {showSaveProblem && persistence !== "conflict" && (
+      {showSaveProblem && (
         <Notice tone="warn">
           <p className="font-semibold">Changes aren&apos;t being saved on this device</p>
           <p className="text-plum-soft">
             {persistence === "unavailable"
               ? "This browser is blocking storage (private mode can do this). You can keep using NestleIn, but changes will disappear when you close this tab."
-              : `Storage is full, so ${pending === 1 ? "your last change wasn't" : `${pending} changes weren't`} saved. They'll stay until you close this tab.`}
+              : `Storage is full, so ${pending <= 1 ? "your latest change wasn't" : `${pending} changes weren't`} saved. ${pending <= 1 ? "It'll" : "They'll"} stay until you close this tab.`}
           </p>
-          {persistence === "failed" && (
-            <div className="mt-2">
+          {persistence === "failed" && pending > 0 && (
+            <div className="mt-2 flex flex-wrap gap-2">
               <NoticeButton onClick={() => actions.retrySave()}>Try again</NoticeButton>
+              <NoticeButton quiet onClick={() => actions.discardPending()}>
+                {`Discard ${pending} unsaved ${pending === 1 ? "change" : "changes"}`}
+              </NoticeButton>
             </div>
           )}
         </Notice>

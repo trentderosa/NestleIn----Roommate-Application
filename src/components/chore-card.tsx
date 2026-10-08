@@ -71,10 +71,14 @@ export function ChoreCard({
     setCelebrating(true);
     // Let the sparkle play before the card moves to "done".
     setTimeout(() => {
-      const undo = actions.completeChore(chore.id);
+      const { undo, conflict } = actions.completeChore(chore.id);
       // Reset even though the card usually re-renders as "done": if the
       // completion is undone, this same card must come back fully interactive.
       setCelebrating(false);
+      if (conflict) {
+        toast("That didn't go through", { description: conflict });
+        return;
+      }
       if (!undo) {
         // Another tab (or roommate view) finished it first.
         toast("Already done ✨", { description: `${chore.title} was already finished.` });

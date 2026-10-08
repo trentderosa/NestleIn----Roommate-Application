@@ -107,40 +107,48 @@ export function useNow(): Date {
 /**
  * Every change is dispatched as an Action with a stable id (see
  * store-core.ts). The store applies it to the *latest* saved data, possibly
- * written by another tab, and may replay it later; `at` and `ids` are fixed
- * when the action is created, so every replay produces the same result.
+ * written by another tab, and may replay it later. `at`, `ids`, and `actor`
+ * (the roommate acting) are fixed when the action is created, so every replay
+ * produces the same result and credits the same person, even if "View as"
+ * changes in between.
  */
-function act<R>(run: (state: HouseholdState, ids: logic.IdSource, at: Date) => Outcome<R>): Outcome<R> {
+function act<R>(
+  run: (state: HouseholdState, ids: logic.IdSource, at: Date, actor: ID) => Outcome<R>,
+): Outcome<R> {
   const at = new Date();
-  return getStore().dispatch<R>({ id: logic.newId("act"), run: (s, ids) => run(s, ids, at) });
+  const actor = getStore().getSnapshot().state.currentUserId;
+  return getStore().dispatch<R>({ id: logic.newId("act"), run: (s, ids) => run(s, ids, at, actor) });
 }
+
+/** Every action reports a user-facing `conflict` when it couldn't be applied. */
+type WithConflict<T> = T & { conflict?: string };
 
 export const actions = {
   /**
-   * Returns an undo record for exactly this completion, or null if nothing
-   * changed (e.g. another tab already finished it, or removed it).
+   * `undo` is the record for exactly this completion, or null if nothing
+   * changed (already finished, or `conflict` explains why).
    */
-  completeChore(choreId: ID): logic.UndoRecord | null {
-    const out = act<logic.UndoRecord | null>((s, ids, at) => {
+  completeChore(choreId: ID): WithConflict<{ undo: logic.UndoRecord | null }> {
+    const out = act<logic.UndoRecord | null>((s, ids, at, actor) => {
       if (!s.chores.some((c) => c.id === choreId)) {
         return { state: s, result: null, conflict: "A chore you marked done was removed in another tab." };
       }
-      const r = logic.completeChoreWithUndo(s, choreId, at, ids);
+      const r = logic.completeChoreWithUndo(s, choreId, at, ids, actor);
       return { state: r.state, result: r.undo };
     });
-    return out.result ?? null;
+    return { undo: out.result ?? null, conflict: out.conflict };
   },
-  /** Returns false if the nudge wasn't sent (cooldown, already done, gone). */
-  sendNudge(input: { choreId: ID; tone: NudgeTone; message: string }): boolean {
-    const out = act<boolean>((s, ids, at) => {
-      const next = logic.sendNudge(s, input, at, ids);
+  /** `sent` is false if the nudge wasn't sent (cooldown, already done, gone). */
+  sendNudge(input: { choreId: ID; tone: NudgeTone; message: string }): WithConflict<{ sent: boolean }> {
+    const out = act<boolean>((s, ids, at, actor) => {
+      const next = logic.sendNudge(s, input, at, ids, actor);
       return { state: next, result: next !== s };
     });
-    return out.result ?? false;
+    return { sent: !out.conflict && out.result === true, conflict: out.conflict };
   },
-  /** Returns false when editing a chore that no longer exists. */
-  saveChore(input: ChoreInput, id?: ID): boolean {
-    const out = act<boolean>((s, ids, at) => {
+  /** `saved` is false when the chore being edited no longer exists. */
+  saveChore(input: ChoreInput, id?: ID): WithConflict<{ saved: boolean }> {
+    const out = act<boolean>((s, ids, at, actor) => {
       if (id && !s.chores.some((c) => c.id === id)) {
         return {
           state: s,
@@ -148,17 +156,17 @@ export const actions = {
           conflict: `Your edit to “${input.title.trim()}” couldn't be saved because it was deleted in another tab.`,
         };
       }
-      return { state: logic.saveChore(s, input, at, id, ids), result: true };
+      return { state: logic.saveChore(s, input, at, id, ids, actor), result: true };
     });
-    return !out.conflict && out.result === true;
+    return { saved: !out.conflict && out.result === true, conflict: out.conflict };
   },
-  /** Returns an undo record for exactly this deletion (null if nothing changed). */
-  deleteChore(id: ID): logic.UndoRecord | null {
+  /** `undo` is the record for exactly this deletion (null if nothing changed). */
+  deleteChore(id: ID): WithConflict<{ undo: logic.UndoRecord | null }> {
     const out = act<logic.UndoRecord | null>((s) => {
       const r = logic.deleteChoreWithUndo(s, id);
       return { state: r.state, result: r.undo };
     });
-    return out.result ?? null;
+    return { undo: out.result ?? null, conflict: out.conflict };
   },
   /** Reverse one earlier operation, or explain why it can't be. */
   undo(record: logic.UndoRecord): { ok: true } | { ok: false; reason: string } {
@@ -166,18 +174,20 @@ export const actions = {
       const r = logic.undo(s, record);
       return { state: r.state, result: r };
     });
-    const r = out.result!;
-    return r.ok ? { ok: true } : { ok: false, reason: r.reason };
+    if (out.conflict || !out.result) return { ok: false, reason: out.conflict ?? "That couldn't be undone." };
+    return out.result.ok ? { ok: true } : { ok: false, reason: out.result.reason };
   },
-  toggleReaction(eventId: ID, emoji: string) {
+  /** Returns a user-facing explanation if it couldn't be applied. */
+  toggleReaction(eventId: ID, emoji: string): string | undefined {
     // Decide add/remove now, from what's on screen, so a replay sets the same thing.
     const shown = getStore().getSnapshot().state;
     const me = shown.currentUserId;
     const on = !shown.activity.find((e) => e.id === eventId)?.reactions[emoji]?.includes(me);
-    act((s) => ({ state: logic.setReaction(s, eventId, emoji, me, on) }));
+    return act((s) => ({ state: logic.setReaction(s, eventId, emoji, me, on) })).conflict;
   },
-  switchUser(id: ID) {
-    act((s) => ({ state: s.currentUserId === id ? s : { ...s, currentUserId: id } }));
+  /** Returns a user-facing explanation if it couldn't be applied. */
+  switchUser(id: ID): string | undefined {
+    return act((s) => ({ state: s.currentUserId === id ? s : { ...s, currentUserId: id } })).conflict;
   },
   /** Start over from the demo seed. The previous data is kept as a backup. */
   resetDemo() {
@@ -187,9 +197,13 @@ export const actions = {
   retrySave() {
     return getStore().retrySave();
   },
-  /** Throw away unsaved changes (after a conflict). */
+  /** Throw away changes that couldn't be saved. */
   discardPending() {
     getStore().discardPending();
+  },
+  /** Hide the list of changes that were dropped as conflicts. */
+  dismissConflicts() {
+    getStore().dismissConflicts();
   },
   dismissRecovery() {
     getStore().dismissRecovery();

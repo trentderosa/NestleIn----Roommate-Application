@@ -210,20 +210,25 @@ export function completeChore(
   choreId: ID,
   now: Date,
   ids: IdSource = newId,
+  actorId: ID = state.currentUserId,
 ): HouseholdState {
-  return completeChoreWithUndo(state, choreId, now, ids).state;
+  return completeChoreWithUndo(state, choreId, now, ids, actorId).state;
 }
 
+/**
+ * `actorId` is who did it. The store fixes it when the action is created, so
+ * a replay credits the same roommate even if "View as" changed meanwhile.
+ */
 export function completeChoreWithUndo(
   state: HouseholdState,
   choreId: ID,
   now: Date,
   ids: IdSource = newId,
+  actorId: ID = state.currentUserId,
 ): { state: HouseholdState; undo: UndoRecord | null } {
   const chore = state.chores.find((c) => c.id === choreId);
   if (!chore || chore.status === "done") return { state, undo: null };
 
-  const actorId = state.currentUserId;
   const onTime = now.toISOString() <= chore.dueAt;
   const done: Chore = {
     ...chore,
@@ -301,9 +306,9 @@ export function sendNudge(
   input: { choreId: ID; tone: NudgeTone; message: string },
   now: Date,
   ids: IdSource = newId,
+  actorId: ID = state.currentUserId,
 ): HouseholdState {
   const chore = state.chores.find((c) => c.id === input.choreId);
-  const actorId = state.currentUserId;
   if (!chore || chore.status === "done" || chore.assigneeId === actorId) return state;
   if (nudgeCooldownRemaining(state, chore.id, actorId, now) > 0) return state;
 
@@ -332,6 +337,7 @@ export function saveChore(
   now: Date,
   id?: ID,
   ids: IdSource = newId,
+  actorId: ID = state.currentUserId,
 ): HouseholdState {
   const clean: ChoreInput = {
     ...input,
@@ -359,14 +365,14 @@ export function saveChore(
     ...clean,
     id: choreId,
     seriesId: ids("series"),
-    createdBy: state.currentUserId,
+    createdBy: actorId,
     createdAt: now.toISOString(),
     status: "open",
   };
   const created = event(
     {
       type: "created",
-      actorId: state.currentUserId,
+      actorId,
       choreId,
       choreTitle: chore.title,
       assigneeId: chore.assigneeId,

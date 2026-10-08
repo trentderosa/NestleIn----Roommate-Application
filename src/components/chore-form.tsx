@@ -115,9 +115,12 @@ export function ChoreForm({ state, chore, now }: { state: HouseholdState; chore?
       rotate: canRotate && rotate,
       points,
     };
-    if (!actions.saveChore(input, chore?.id)) {
-      toast("That chore was removed", { description: "It was deleted in another tab, so there was nothing to save." });
-      router.push("/chores?filter=all");
+    const { saved, conflict } = actions.saveChore(input, chore?.id);
+    if (!saved) {
+      toast("That didn't go through", {
+        description: conflict ?? "It was deleted in another tab, so there was nothing to save.",
+      });
+      router.push(editing ? "/chores?filter=all" : "/");
       return;
     }
     const firstUp = `${nameOf(assigneeId) === "You" ? "You're" : `${nameOf(assigneeId)} is`} up first.`;
@@ -140,8 +143,9 @@ export function ChoreForm({ state, chore, now }: { state: HouseholdState; chore?
       setConfirmDelete(true);
       return;
     }
-    const undo = actions.deleteChore(chore.id);
-    if (undo) showUndoToast(`${chore.title} removed`, undo);
+    const { undo, conflict } = actions.deleteChore(chore.id);
+    if (conflict) toast("That didn't go through", { description: conflict });
+    else if (undo) showUndoToast(`${chore.title} removed`, undo);
     router.push("/chores?filter=all");
   }
 

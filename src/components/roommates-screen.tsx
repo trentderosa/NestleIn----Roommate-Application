@@ -85,8 +85,9 @@ export function RoommatesScreen() {
               type="button"
               aria-pressed={r.id === state.currentUserId}
               onClick={() => {
-                actions.switchUser(r.id);
-                toast(`Now viewing as ${r.name} ${r.emoji}`);
+                const conflict = actions.switchUser(r.id);
+                if (conflict) toast("That didn't go through", { description: conflict });
+                else toast(`Now viewing as ${r.name} ${r.emoji}`);
               }}
               className={cn(
                 "flex items-center gap-1.5 rounded-full py-1 pr-3 pl-1 text-sm font-semibold transition",

@@ -40,6 +40,12 @@
  * recent writes of ours against the stored lineage; any write that isn't in
  * it was overwritten by a racing tab, so its actions are queued again.
  *
+ * ## Changes that no longer fit
+ * If a pending action no longer applies to newer data (e.g. editing a chore
+ * another tab deleted), only that action is dropped, with a user-facing
+ * message kept in `conflicts`; the rest are saved. An action taken right
+ * after another tab reset the household is rejected with an explanation.
+ *
  * Remaining limitation: lost writes are only detected for this tab's writes
  * from the last minute, and lineage keeps the last 200 writes. A real backend
  * replaces all of this with server-side ordering.
@@ -67,9 +73,7 @@ export type Persistence =
   /** Storage can't be read or written at all (blocked, private mode). */
   | "unavailable"
   /** Storage works but writing failed (usually: full), or is paused to protect unbacked data. */
-  | "failed"
-  /** Unsaved changes no longer fit newer data from another tab. */
-  | "conflict";
+  | "failed";
 
 export type Recovery = {
   /** Why saved data was rejected. */
@@ -87,7 +91,7 @@ export type Snapshot = {
   revision: number;
   persistence: Persistence;
   recovery: Recovery | null;
-  /** User-facing reasons, when persistence is "conflict". */
+  /** Why earlier unsaved changes were dropped (they no longer fit newer data). */
   conflicts: string[];
   /** Number of actions not yet saved. */
   pending: number;
@@ -103,6 +107,9 @@ export type Action<R = unknown> = {
 };
 
 /** Deterministic ids for one action: the same sequence on every replay. */
+export const RESET_ELSEWHERE =
+  "Your place was reset in another tab, so that change wasn't applied. You're now seeing the fresh start.";
+
 export function idsFor(actionId: string): IdSource {
   let n = 0;
   return (prefix) => `${prefix}_${actionId}_${(n++).toString(36)}`;
@@ -188,6 +195,8 @@ export function createHouseholdStore({
   let resetPending = false;
   /** Outcomes computed by the latest flush, by action id. */
   let flushResults = new Map<string, Outcome>();
+  /** Set by adopt() when the saved data turns out to be from another tab's reset. */
+  let resetDetected = false;
   let snapshot: Snapshot | null = null;
   const listeners = new Set<() => void>();
 
@@ -272,6 +281,7 @@ export function createHouseholdStore({
       pending = [];
       unconfirmed = [];
       conflicts = [];
+      resetDetected = true;
     }
     const cutoff = now().getTime() - UNCONFIRMED_WINDOW_MS;
     const lost: Action[] = [];
@@ -300,9 +310,9 @@ export function createHouseholdStore({
 
   /**
    * Try to save: replay pending actions on the latest saved data and write.
-   * `fresh` is an action the user just took; if it no longer fits it is
-   * dropped (the caller reports why). Older pending actions that no longer fit
-   * are kept and reported as a conflict instead of being saved.
+   * Actions that no longer fit are dropped and the rest are saved. `fresh` is
+   * an action the user just took: the caller reports its conflict directly.
+   * Older pending actions' conflicts are kept in `conflicts` for the notice.
    */
   function flush(fresh?: Action, depth = 0) {
     if (!storage) {
@@ -328,16 +338,15 @@ export function createHouseholdStore({
 
     let attempt = replay(pending);
     attempt.results.forEach((o, id) => flushResults.set(id, o));
-    if (fresh && attempt.conflicts.some((c) => c.action.id === fresh.id)) {
-      pending = pending.filter((a) => a.id !== fresh.id);
+    // Drop only the actions that no longer fit. Dropping one can make a later
+    // one stop fitting, so repeat until everything left applies cleanly.
+    while (attempt.conflicts.length) {
+      const dropped = new Set(attempt.conflicts.map((c) => c.action.id));
+      const older = attempt.conflicts.filter((c) => c.action.id !== fresh?.id).map((c) => c.message);
+      conflicts = [...conflicts, ...older];
+      pending = pending.filter((a) => !dropped.has(a.id));
       attempt = replay(pending);
     }
-    if (attempt.conflicts.length) {
-      persistence = "conflict";
-      conflicts = attempt.conflicts.map((c) => c.message);
-      return;
-    }
-    conflicts = [];
     if (attempt.state === base.state && base.writeId !== UNSAVED) {
       // Nothing to write (no pending actions, or they were all no-ops).
       pending = [];
@@ -413,12 +422,23 @@ export function createHouseholdStore({
   function dispatch<R>(action: Action<R>): Outcome<R> {
     ensureLoaded();
     flushResults = new Map();
-    pending = [...pending, action as Action];
-    flush(action as Action);
+    resetDetected = false;
+    // Catch up first, so the action is judged against the latest data (and a
+    // reset in another tab is adopted before anything is queued on top of it).
+    refresh();
+    if (!resetDetected) {
+      pending = [...pending, action as Action];
+      flush(action as Action);
+    }
     emit();
+    if (resetDetected) {
+      // Built against data that no longer exists: don't apply it.
+      return { state: snapshot!.state, conflict: RESET_ELSEWHERE };
+    }
     // Saved (or dropped as a conflict): the flush computed its outcome.
     // Still pending (storage failed/unavailable): replay gives the same one.
-    return (flushResults.get(action.id) ?? replay(pending).results.get(action.id)) as Outcome<R>;
+    const outcome = flushResults.get(action.id) ?? replay(pending).results.get(action.id);
+    return (outcome ?? { state: snapshot!.state, conflict: "That change couldn't be applied." }) as Outcome<R>;
   }
 
   /** Handle a `storage` event (fired in *other* tabs when one tab writes). */
@@ -438,13 +458,19 @@ export function createHouseholdStore({
     return persistence;
   }
 
-  /** Throw away unsaved changes (e.g. after a conflict). */
+  /** Throw away unsaved changes (e.g. when storage stays full). */
   function discardPending() {
     ensureLoaded();
     pending = [];
-    conflicts = [];
     refresh();
     persistence = !storage ? "unavailable" : protectRaw ? "failed" : "saved";
+    emit();
+  }
+
+  /** The user has read why some changes were dropped. */
+  function dismissConflicts() {
+    ensureLoaded();
+    conflicts = [];
     emit();
   }
 
@@ -468,10 +494,20 @@ export function createHouseholdStore({
    */
   function reset() {
     ensureLoaded();
+    if (protectRaw && recovery && !keep(RECOVERY_KEY, recovery.raw, recovery.reason)) {
+      // Still no safe copy of the unreadable data, so storage stays untouched:
+      // start over in memory only, keep protecting the old data, and keep
+      // `recovery` (with its raw text) so it can still be copied.
+      base = seedBase();
+      pending = [];
+      unconfirmed = [];
+      persistence = "failed";
+      emit();
+      return;
+    }
     const found = read();
     if (found.kind === "ok") keep(BACKUP_KEY, JSON.stringify(found.saved.state), "reset by user");
     else if (found.kind === "invalid") keep(BACKUP_KEY, found.raw, found.reason);
-    if (protectRaw && recovery) keep(RECOVERY_KEY, recovery.raw, recovery.reason);
 
     const savedRevision = Math.max(base.revision, found.kind === "ok" ? found.saved.revision : 0);
     base = { state: seed(), revision: savedRevision, writeId: UNSAVED, lineage: [], epoch: randomId("epoch") };
@@ -501,6 +537,7 @@ export function createHouseholdStore({
     handleStorageEvent,
     retrySave,
     discardPending,
+    dismissConflicts,
     dismissRecovery,
     reset,
   };

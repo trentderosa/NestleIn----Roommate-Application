@@ -93,9 +93,10 @@ function NudgeForm({
 
   function send() {
     if (sent || coolingDown || !message.trim()) return;
-    if (!actions.sendNudge({ choreId: chore.id, tone, message })) {
-      // Another tab nudged or finished it in the meantime.
-      toast("Nudge not sent", { description: "It was already nudged or finished." });
+    const { sent: delivered, conflict } = actions.sendNudge({ choreId: chore.id, tone, message });
+    if (!delivered) {
+      // Another tab nudged, finished, or reset it in the meantime.
+      toast("Nudge not sent", { description: conflict ?? "It was already nudged or finished." });
       onClose();
       return;
     }
