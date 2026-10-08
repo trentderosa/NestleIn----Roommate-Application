@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 import { useHousehold } from "@/lib/store";
 import { Avatar, AvatarStack } from "./avatar";
 import { Logo } from "./logo";
+import { StorageNotice } from "./storage-notice";
 
 const NAV = [
   { href: "/", label: "Home", icon: Home },
@@ -70,7 +71,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         )}
       </aside>
 
-      <main className="pb-28 md:pb-12 md:pl-64">{children}</main>
+      <main id="main" tabIndex={-1} className="pb-28 outline-none md:pb-12 md:pl-64">
+        <div className="px-4 pt-4 sm:px-6 md:pt-0 lg:px-10 empty:hidden">
+          <StorageNotice />
+        </div>
+        {children}
+      </main>
 
       {/* Mobile tab bar */}
       <nav

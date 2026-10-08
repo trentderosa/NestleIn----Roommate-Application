@@ -13,10 +13,11 @@ import {
   RECURRENCE_LABELS,
   RECURRENCE_ORDER,
 } from "@/lib/design";
-import { actions } from "@/lib/store";
+import { actions, isPersisted } from "@/lib/store";
 import { fromDateTimeInputs, toDateInput, toTimeInput } from "@/lib/time";
 import type { Chore, ChoreCategory, ChoreInput, HouseholdState, Points, Recurrence } from "@/lib/types";
 import { Avatar } from "./avatar";
+import { showUndoToast } from "./undo-toast";
 
 const TEMPLATES: { title: string; category: ChoreCategory; recurrence: Recurrence; points: Points }[] = [
   { title: "Take out the trash", category: "trash", recurrence: "weekly", points: 1 },
@@ -114,12 +115,25 @@ export function ChoreForm({ state, chore, now }: { state: HouseholdState; chore?
       rotate: canRotate && rotate,
       points,
     };
-    actions.saveChore(input, chore?.id);
-    toast(editing ? "Saved ✨" : `${title.trim()} is on the board ✨`, {
-      description: editing
-        ? undefined
-        : `${nameOf(assigneeId) === "You" ? "You're" : `${nameOf(assigneeId)} is`} up first.`,
-    });
+    const { saved, conflict } = actions.saveChore(input, chore?.id);
+    if (!saved) {
+      toast("That didn't go through", {
+        description: conflict ?? "It was deleted in another tab, so there was nothing to save.",
+      });
+      router.push(editing ? "/chores?filter=all" : "/");
+      return;
+    }
+    const firstUp = `${nameOf(assigneeId) === "You" ? "You're" : `${nameOf(assigneeId)} is`} up first.`;
+    if (isPersisted()) {
+      toast(editing ? "Saved ✨" : `${title.trim()} is on the board ✨`, {
+        description: editing ? undefined : firstUp,
+      });
+    } else {
+      // Don't promise persistence when storage failed; the banner explains.
+      toast(editing ? "Updated for now" : `${title.trim()} added for now`, {
+        description: "It isn't saved on this device yet.",
+      });
+    }
     router.push(editing ? "/chores?filter=all" : "/");
   }
 
@@ -129,10 +143,9 @@ export function ChoreForm({ state, chore, now }: { state: HouseholdState; chore?
       setConfirmDelete(true);
       return;
     }
-    const undo = actions.deleteChore(chore.id);
-    if (undo) {
-      toast(`${chore.title} removed`, { action: { label: "Undo", onClick: () => actions.undo(undo) } });
-    }
+    const { undo, conflict } = actions.deleteChore(chore.id);
+    if (conflict) toast("That didn't go through", { description: conflict });
+    else if (undo) showUndoToast(`${chore.title} removed`, undo);
     router.push("/chores?filter=all");
   }
 

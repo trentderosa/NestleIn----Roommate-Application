@@ -7,8 +7,8 @@
  */
 import { HOUR, DAY, MINUTE } from "./time";
 import type { ActivityEvent, Chore, HouseholdState, Roommate } from "./types";
+import { STATE_VERSION } from "./validate";
 
-export const STATE_VERSION = 1;
 
 const ROOMMATES: Roommate[] = [
   {

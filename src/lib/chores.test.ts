@@ -10,10 +10,12 @@ import {
   nudgeCooldownRemaining,
   saveChore,
   sendNudge,
+  setReaction,
   toggleReaction,
   undo,
 } from "./chores";
 import { createSeedState } from "./mock-data";
+import { idsFor } from "./store-core";
 import { HOUR, MINUTE } from "./time";
 
 const NOW = new Date(2026, 9, 7, 15, 0); // Wed Oct 7 2026, 3:00 PM local
@@ -183,7 +185,7 @@ describe("undo (review fix)", () => {
     const s = seed();
     const a = completeChoreWithUndo(s, "chore_counters", NOW);
     const b = completeChoreWithUndo(a.state, "chore_trash", NOW);
-    const after = undo(b.state, a.undo!);
+    const after = undo(b.state, a.undo!).state;
 
     // A is open again, and its spawned next occurrence and events are gone.
     expect(after.chores.find((c) => c.id === "chore_counters")!.status).toBe("open");
@@ -204,7 +206,7 @@ describe("undo (review fix)", () => {
     const a = completeChoreWithUndo(seed(), "chore_counters", NOW);
     const reacted = toggleReaction(a.state, "evt_soap", "💕");
     const nudged = sendNudge(reacted, { choreId: "chore_dishwasher", tone: "sweet", message: "hi" }, NOW);
-    const after = undo(nudged, a.undo!);
+    const after = undo(nudged, a.undo!).state;
     expect(after.activity.find((e) => e.id === "evt_soap")!.reactions["💕"]).toEqual(["krystiana"]);
     expect(after.activity.some((e) => e.type === "nudged" && e.choreId === "chore_dishwasher" && e.message === "hi")).toBe(true);
   });
@@ -214,8 +216,107 @@ describe("undo (review fix)", () => {
     const index = s.chores.findIndex((c) => c.id === "chore_fridge");
     const del = deleteChoreWithUndo(s, "chore_fridge");
     const later = completeChore(del.state, "chore_counters", NOW);
-    const after = undo(later, del.undo!);
+    const after = undo(later, del.undo!).state;
     expect(after.chores[index].id).toBe("chore_fridge");
     expect(after.chores.find((c) => c.id === "chore_counters")!.status).toBe("done");
+  });
+});
+
+describe("undo safety", () => {
+  const openInSeries = (s: ReturnType<typeof seed>, seriesId: string) =>
+    s.chores.filter((c) => c.seriesId === seriesId && c.status === "open");
+
+  it("refuses when the next occurrence was already completed (no duplicate open chores)", () => {
+    const a = completeChoreWithUndo(seed(), "chore_counters", NOW);
+    const next = openInSeries(a.state, "series_counters")[0];
+    const b = completeChoreWithUndo(a.state, next.id, NOW);
+
+    const result = undo(b.state, a.undo!);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toMatch(/already done/);
+    expect(result.state).toBe(b.state); // nothing changed
+    expect(openInSeries(result.state, "series_counters")).toHaveLength(1);
+  });
+
+  it("refuses when another open occurrence of the series exists", () => {
+    const a = completeChoreWithUndo(seed(), "chore_counters", NOW);
+    // The spawned occurrence is deleted and a new open copy appears (e.g. re-added).
+    const spawned = openInSeries(a.state, "series_counters")[0];
+    const twin = { ...spawned, id: "chore_twin" };
+    const state = { ...a.state, chores: [...a.state.chores.filter((c) => c.id !== spawned.id), twin] };
+    const result = undo(state, a.undo!);
+    expect(result.ok).toBe(false);
+    expect(openInSeries(result.state, "series_counters")).toHaveLength(1);
+  });
+
+  it("refuses to undo twice, or after the chore was removed", () => {
+    const a = completeChoreWithUndo(seed(), "chore_counters", NOW);
+    const once = undo(a.state, a.undo!);
+    expect(once.ok).toBe(true);
+    const twice = undo(once.state, a.undo!);
+    expect(twice).toMatchObject({ ok: false, reason: "That's already been undone." });
+
+    const removed = deleteChoreWithUndo(a.state, "chore_counters").state;
+    expect(undo(removed, a.undo!)).toMatchObject({ ok: false, reason: expect.stringMatching(/removed/) });
+  });
+
+  it("refuses to restore a deleted chore that's already back", () => {
+    const del = deleteChoreWithUndo(seed(), "chore_fridge");
+    const restored = undo(del.state, del.undo!);
+    expect(restored.ok).toBe(true);
+    expect(undo(restored.state, del.undo!)).toMatchObject({ ok: false });
+  });
+});
+
+describe("replay safety", () => {
+  // Fix 6
+  it("refuses to undo when the next occurrence was edited since, and keeps the edits", () => {
+    const a = completeChoreWithUndo(seed(), "chore_counters", NOW);
+    const record = a.undo!;
+    const spawnedId = record.kind === "complete" ? record.spawnedId! : "";
+    const spawned = a.state.chores.find((c) => c.id === spawnedId)!;
+    const edited = saveChore(a.state, { ...spawned, title: "Wipe counters + stovetop" }, NOW, spawnedId);
+
+    const result = undo(edited, record);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toMatch(/was changed after this was done/);
+    expect(result.state).toBe(edited);
+    expect(result.state.chores.find((c) => c.id === spawnedId)!.title).toBe("Wipe counters + stovetop");
+  });
+
+  it("still undoes when the next occurrence is untouched", () => {
+    const a = completeChoreWithUndo(seed(), "chore_counters", NOW);
+    expect(undo(a.state, a.undo!).ok).toBe(true);
+  });
+
+  // Fix 5
+  it("deterministic ids make a replayed completion identical", () => {
+    const first = completeChoreWithUndo(seed(), "chore_trash", NOW, idsFor("act_1"));
+    const again = completeChoreWithUndo(seed(), "chore_trash", NOW, idsFor("act_1"));
+    expect(again.undo).toEqual(first.undo);
+    expect(again.state.activity.map((e) => e.id)).toEqual(first.state.activity.map((e) => e.id));
+  });
+
+  it("replaying create, nudge, and reaction actions doesn't duplicate them", () => {
+    const input = {
+      title: "Descale kettle",
+      category: "kitchen" as const,
+      assigneeId: "ellie",
+      dueAt: NOW.toISOString(),
+      recurrence: "once" as const,
+      rotate: false,
+      points: 1 as const,
+    };
+    const created = saveChore(seed(), input, NOW, undefined, idsFor("act_c"));
+    expect(saveChore(created, input, NOW, undefined, idsFor("act_c"))).toBe(created);
+
+    const nudge = { choreId: "chore_dishwasher", tone: "sweet" as const, message: "hi" };
+    const nudged = sendNudge(seed(), nudge, NOW, idsFor("act_n"));
+    expect(sendNudge(nudged, nudge, NOW, idsFor("act_n"))).toBe(nudged);
+
+    const on = setReaction(seed(), "evt_soap", "💕", "krystiana", true);
+    expect(setReaction(on, "evt_soap", "💕", "krystiana", true)).toBe(on);
   });
 });

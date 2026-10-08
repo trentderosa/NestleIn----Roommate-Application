@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { SmilePlus } from "lucide-react";
+import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { actions } from "@/lib/store";
 import { relativeTime } from "@/lib/time";
@@ -84,6 +85,10 @@ export function ActivityItem({
   }
 
   const reactions = Object.entries(event.reactions);
+  const react = (emoji: string) => {
+    const conflict = actions.toggleReaction(event.id, emoji);
+    if (conflict) toast("That didn't go through", { description: conflict });
+  };
 
   return (
     <li className="flex gap-3">
@@ -121,7 +126,7 @@ export function ActivityItem({
                   key={emoji}
                   type="button"
                   disabled={compact}
-                  onClick={() => actions.toggleReaction(event.id, emoji)}
+                  onClick={() => react(emoji)}
                   aria-pressed={mine}
                   aria-label={`${emoji} ${ids.length}: ${ids.map((id) => person(id)).join(", ")}`}
                   className={cn(
@@ -146,7 +151,7 @@ export function ActivityItem({
                       type="button"
                       aria-label={`React with ${emoji}`}
                       onClick={() => {
-                        actions.toggleReaction(event.id, emoji);
+                        react(emoji);
                         setPicking(false);
                       }}
                       className="rounded-full px-1 text-base transition hover:scale-125"

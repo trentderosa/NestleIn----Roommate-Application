@@ -11,6 +11,7 @@ import { actions } from "@/lib/store";
 import { dueLabel, relativeTime } from "@/lib/time";
 import type { Chore, HouseholdState } from "@/lib/types";
 import { Avatar } from "./avatar";
+import { showUndoToast } from "./undo-toast";
 
 const CHEERS = [
   "Look at you go 💅",
@@ -70,15 +71,22 @@ export function ChoreCard({
     setCelebrating(true);
     // Let the sparkle play before the card moves to "done".
     setTimeout(() => {
-      const undo = actions.completeChore(chore.id);
+      const { undo, conflict } = actions.completeChore(chore.id);
       // Reset even though the card usually re-renders as "done": if the
       // completion is undone, this same card must come back fully interactive.
       setCelebrating(false);
-      if (!undo) return;
+      if (conflict) {
+        toast("That didn't go through", { description: conflict });
+        return;
+      }
+      if (!undo) {
+        // Another tab (or roommate view) finished it first.
+        toast("Already done ✨", { description: `${chore.title} was already finished.` });
+        return;
+      }
       const cheer = CHEERS[Math.floor(Math.random() * CHEERS.length)];
-      toast(isMine ? `${chore.title}: done ✨` : `You covered for ${assignee?.name} 💕`, {
+      showUndoToast(isMine ? `${chore.title}: done ✨` : `You covered for ${assignee?.name} 💕`, undo, {
         description: isMine ? `${cheer} · +${chore.points} pts` : `${chore.title} is off the list.`,
-        action: { label: "Undo", onClick: () => actions.undo(undo) },
       });
     }, CELEBRATE_MS);
   }
@@ -183,7 +191,8 @@ export function ChoreCard({
         </button>
       </div>
       {cooldown > 0 && (
-        <p className="mt-2 text-center text-xs text-plum-soft" aria-live="polite">
+        // Not a live region: it ticks every 30s and would be re-announced.
+        <p className="mt-2 text-center text-xs text-plum-soft">
           You nudged {assignee?.name}. You can nudge again in {Math.ceil(cooldown / 60_000)}m.
         </p>
       )}

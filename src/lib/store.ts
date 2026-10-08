@@ -1,10 +1,11 @@
 "use client";
 
 /**
- * Client-side household store (the mock persistence layer).
+ * React bindings for the household store (the mock persistence layer).
  *
- * - State lives in memory and is mirrored to localStorage so the demo
- *   survives refreshes.
+ * - The store itself (validation, recovery, cross-tab sync) is in
+ *   store-core.ts; this file creates the one instance for the browser and
+ *   exposes hooks plus `actions`.
  * - Components read with `useHousehold()` and write through `actions`.
  * - The server render (and hydration pass) sees `null`, so UI that depends on
  *   household data renders a skeleton first. That avoids hydration mismatches
@@ -16,55 +17,64 @@
  */
 import { useSyncExternalStore } from "react";
 import * as logic from "./chores";
-import { STATE_VERSION, createSeedState } from "./mock-data";
+import { createSeedState } from "./mock-data";
+import {
+  createHouseholdStore,
+  type HouseholdStore,
+  type Outcome,
+  type Snapshot,
+  type StorageLike,
+} from "./store-core";
 import type { ChoreInput, HouseholdState, ID, NudgeTone } from "./types";
 
-const STORAGE_KEY = "nestlein:household";
-
-let state: HouseholdState | null = null;
-const listeners = new Set<() => void>();
-
-function load(): HouseholdState {
+/** localStorage, or null if the browser blocks it entirely. */
+function browserStorage(): StorageLike | null {
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw) as HouseholdState;
-      if (parsed.version === STATE_VERSION) return parsed;
-    }
+    const storage = window.localStorage;
+    storage.getItem("nestlein:probe");
+    return storage;
   } catch {
-    // Private mode or corrupted data: fall back to the seed.
+    return null;
   }
-  return createSeedState(new Date());
 }
 
-function getSnapshot(): HouseholdState {
-  if (!state) state = load();
-  return state;
-}
+let store: HouseholdStore | null = null;
 
-function getServerSnapshot(): HouseholdState | null {
-  return null;
-}
-
-function subscribe(listener: () => void) {
-  listeners.add(listener);
-  return () => listeners.delete(listener);
-}
-
-function setState(next: HouseholdState) {
-  state = next;
-  clock = new Date(); // keep "now" in step with the change we just made
-  try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-  } catch {
-    // Storage full or unavailable: keep working in memory.
+/** The browser's single store, created on first use (client only). */
+function getStore(): HouseholdStore {
+  if (!store) {
+    const created = createHouseholdStore({
+      storage: browserStorage(),
+      seed: () => createSeedState(new Date()),
+      tabId: logic.newId("tab"),
+    });
+    // Other tabs' writes arrive as storage events.
+    window.addEventListener("storage", (e) => created.handleStorageEvent(e.key));
+    // Keep "now" in step with every change.
+    created.subscribe(() => {
+      clock = new Date();
+    });
+    store = created;
   }
-  listeners.forEach((l) => l());
+  return store;
+}
+
+const subscribe = (listener: () => void) => getStore().subscribe(listener);
+const getSnapshot = () => getStore().getSnapshot();
+
+/** Household state plus persistence status, or null during server render / hydration. */
+export function useHouseholdSnapshot(): Snapshot | null {
+  return useSyncExternalStore(subscribe, getSnapshot, () => null);
 }
 
 /** Current household state, or null during server render / hydration. */
 export function useHousehold(): HouseholdState | null {
-  return useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
+  return useHouseholdSnapshot()?.state ?? null;
+}
+
+/** Whether the latest change actually reached storage. */
+export function isPersisted(): boolean {
+  return getStore().getSnapshot().persistence === "saved";
 }
 
 // A shared client clock. Like household state, it's never read on the server:
@@ -94,36 +104,108 @@ export function useNow(): Date {
   return useSyncExternalStore(subscribeClock, getClock, () => EPOCH);
 }
 
+/**
+ * Every change is dispatched as an Action with a stable id (see
+ * store-core.ts). The store applies it to the *latest* saved data, possibly
+ * written by another tab, and may replay it later. `at`, `ids`, and `actor`
+ * (the roommate acting) are fixed when the action is created, so every replay
+ * produces the same result and credits the same person, even if "View as"
+ * changes in between.
+ */
+function act<R>(
+  run: (state: HouseholdState, ids: logic.IdSource, at: Date, actor: ID) => Outcome<R>,
+): Outcome<R> {
+  const at = new Date();
+  const actor = getStore().getSnapshot().state.currentUserId;
+  return getStore().dispatch<R>({ id: logic.newId("act"), run: (s, ids) => run(s, ids, at, actor) });
+}
+
+/** Every action reports a user-facing `conflict` when it couldn't be applied. */
+type WithConflict<T> = T & { conflict?: string };
+
 export const actions = {
-  /** Returns an undo record for exactly this completion (null if nothing changed). */
-  completeChore(choreId: ID): logic.UndoRecord | null {
-    const { state: next, undo } = logic.completeChoreWithUndo(getSnapshot(), choreId, new Date());
-    setState(next);
-    return undo;
+  /**
+   * `undo` is the record for exactly this completion, or null if nothing
+   * changed (already finished, or `conflict` explains why).
+   */
+  completeChore(choreId: ID): WithConflict<{ undo: logic.UndoRecord | null }> {
+    const out = act<logic.UndoRecord | null>((s, ids, at, actor) => {
+      if (!s.chores.some((c) => c.id === choreId)) {
+        return { state: s, result: null, conflict: "A chore you marked done was removed in another tab." };
+      }
+      const r = logic.completeChoreWithUndo(s, choreId, at, ids, actor);
+      return { state: r.state, result: r.undo };
+    });
+    return { undo: out.result ?? null, conflict: out.conflict };
   },
-  sendNudge(input: { choreId: ID; tone: NudgeTone; message: string }) {
-    setState(logic.sendNudge(getSnapshot(), input, new Date()));
+  /** `sent` is false if the nudge wasn't sent (cooldown, already done, gone). */
+  sendNudge(input: { choreId: ID; tone: NudgeTone; message: string }): WithConflict<{ sent: boolean }> {
+    const out = act<boolean>((s, ids, at, actor) => {
+      const next = logic.sendNudge(s, input, at, ids, actor);
+      return { state: next, result: next !== s };
+    });
+    return { sent: !out.conflict && out.result === true, conflict: out.conflict };
   },
-  saveChore(input: ChoreInput, id?: ID) {
-    setState(logic.saveChore(getSnapshot(), input, new Date(), id));
+  /** `saved` is false when the chore being edited no longer exists. */
+  saveChore(input: ChoreInput, id?: ID): WithConflict<{ saved: boolean }> {
+    const out = act<boolean>((s, ids, at, actor) => {
+      if (id && !s.chores.some((c) => c.id === id)) {
+        return {
+          state: s,
+          result: false,
+          conflict: `Your edit to “${input.title.trim()}” couldn't be saved because it was deleted in another tab.`,
+        };
+      }
+      return { state: logic.saveChore(s, input, at, id, ids, actor), result: true };
+    });
+    return { saved: !out.conflict && out.result === true, conflict: out.conflict };
   },
-  /** Returns an undo record for exactly this deletion (null if nothing changed). */
-  deleteChore(id: ID): logic.UndoRecord | null {
-    const { state: next, undo } = logic.deleteChoreWithUndo(getSnapshot(), id);
-    setState(next);
-    return undo;
+  /** `undo` is the record for exactly this deletion (null if nothing changed). */
+  deleteChore(id: ID): WithConflict<{ undo: logic.UndoRecord | null }> {
+    const out = act<logic.UndoRecord | null>((s) => {
+      const r = logic.deleteChoreWithUndo(s, id);
+      return { state: r.state, result: r.undo };
+    });
+    return { undo: out.result ?? null, conflict: out.conflict };
   },
-  /** Reverse one earlier operation without touching anything that happened since. */
-  undo(record: logic.UndoRecord) {
-    setState(logic.undo(getSnapshot(), record));
+  /** Reverse one earlier operation, or explain why it can't be. */
+  undo(record: logic.UndoRecord): { ok: true } | { ok: false; reason: string } {
+    const out = act<logic.UndoResult>((s) => {
+      const r = logic.undo(s, record);
+      return { state: r.state, result: r };
+    });
+    if (out.conflict || !out.result) return { ok: false, reason: out.conflict ?? "That couldn't be undone." };
+    return out.result.ok ? { ok: true } : { ok: false, reason: out.result.reason };
   },
-  toggleReaction(eventId: ID, emoji: string) {
-    setState(logic.toggleReaction(getSnapshot(), eventId, emoji));
+  /** Returns a user-facing explanation if it couldn't be applied. */
+  toggleReaction(eventId: ID, emoji: string): string | undefined {
+    // Decide add/remove now, from what's on screen, so a replay sets the same thing.
+    const shown = getStore().getSnapshot().state;
+    const me = shown.currentUserId;
+    const on = !shown.activity.find((e) => e.id === eventId)?.reactions[emoji]?.includes(me);
+    return act((s) => ({ state: logic.setReaction(s, eventId, emoji, me, on) })).conflict;
   },
-  switchUser(id: ID) {
-    setState({ ...getSnapshot(), currentUserId: id });
+  /** Returns a user-facing explanation if it couldn't be applied. */
+  switchUser(id: ID): string | undefined {
+    return act((s) => ({ state: s.currentUserId === id ? s : { ...s, currentUserId: id } })).conflict;
   },
+  /** Start over from the demo seed. The previous data is kept as a backup. */
   resetDemo() {
-    setState(createSeedState(new Date()));
+    getStore().reset();
+  },
+  /** Replay unsaved changes on the latest saved data and save again. */
+  retrySave() {
+    return getStore().retrySave();
+  },
+  /** Throw away changes that couldn't be saved. */
+  discardPending() {
+    getStore().discardPending();
+  },
+  /** Hide the list of changes that were dropped as conflicts. */
+  dismissConflicts() {
+    getStore().dismissConflicts();
+  },
+  dismissRecovery() {
+    getStore().dismissRecovery();
   },
 };
